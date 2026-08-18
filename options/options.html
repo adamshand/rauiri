@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rauiri settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <span class="eyebrow">Rauiri</span>
+          <h1>Settings</h1>
+        </div>
+        <p>Shape the contexts. Keep the rules sparse.</p>
+      </header>
+
+      <section>
+        <div class="section-copy">
+          <h2>Contexts</h2>
+          <p>Names, colours, and order map directly to Helium’s native groups.</p>
+        </div>
+        <div class="section-body">
+          <div id="contexts" class="rows"></div>
+          <div class="actions">
+            <button id="add-context" class="quiet">Add context</button>
+            <button id="save-contexts" class="primary">Save contexts</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-copy">
+          <h2>Strict routes</h2>
+          <p>Only add sites that belong to one context every time. Routed sites stay out of automatic Read Later.</p>
+        </div>
+        <div class="section-body">
+          <form id="route-form" class="route-form">
+            <label>
+              <span>Hostname</span>
+              <input id="route-host" placeholder="app.example.com" required>
+            </label>
+            <label>
+              <span>Context</span>
+              <select id="route-context"></select>
+            </label>
+            <label class="checkbox">
+              <input id="move-existing" type="checkbox" checked>
+              <span>Move existing matches</span>
+            </label>
+            <button class="primary" type="submit">Add route</button>
+          </form>
+          <div id="routes" class="route-list"></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-copy">
+          <h2>Lifecycle</h2>
+          <p>The hourly sweep shelves stale tabs and cools Read Later without closing anything.</p>
+        </div>
+        <div class="section-body lifecycle">
+          <label>
+            <span>Move ordinary tabs after</span>
+            <div><input id="archive-hours" type="number" min="1" max="720" step="1"> hours idle</div>
+          </label>
+          <label>
+            <span>Unload Read Later after</span>
+            <div><input id="discard-hours" type="number" min="1" max="720" step="1"> hours idle</div>
+          </label>
+          <div class="actions">
+            <button id="run-sweep" class="quiet">Run sweep now</button>
+            <button id="save-lifecycle" class="primary">Save lifecycle</button>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span id="status" role="status">Loading…</span>
+        <span>Everything stays on this device.</span>
+      </footer>
+    </main>
+
+    <template id="context-template">
+      <div class="context-row">
+        <div class="order-buttons">
+          <button class="move-up" title="Move up" aria-label="Move context up">↑</button>
+          <button class="move-down" title="Move down" aria-label="Move context down">↓</button>
+        </div>
+        <input class="context-title" aria-label="Context name">
+        <select class="context-color" aria-label="Context colour"></select>
+        <button class="remove" title="Remove context" aria-label="Remove context">×</button>
+      </div>
+    </template>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

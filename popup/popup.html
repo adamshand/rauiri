@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rauiri</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <div class="context-edge" aria-hidden="true"></div>
+    <main>
+      <header>
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <div>
+          <h1>Rauiri</h1>
+          <p id="status">Finding your window…</p>
+        </div>
+      </header>
+
+      <section id="setup" class="setup" hidden>
+        <p id="setup-copy">This window is outside Rauiri.</p>
+        <button id="adopt" class="primary">Manage this window</button>
+        <button id="focus-managed" class="secondary" hidden>Go to managed window</button>
+      </section>
+
+      <section id="workspace" hidden>
+        <label class="field context-field">
+          <span>Current context</span>
+          <select id="active-context"></select>
+        </label>
+
+        <div class="rule"></div>
+
+        <div class="tab-heading">
+          <span>Current tab</span>
+          <span id="tab-host"></span>
+        </div>
+        <h2 id="tab-title">Untitled tab</h2>
+
+        <label class="field compact">
+          <span>Belongs to</span>
+          <select id="tab-context"></select>
+        </label>
+
+        <label class="field compact">
+          <span>Pin</span>
+          <select id="pin-scope">
+            <option value="none">Not pinned</option>
+            <option value="context">Current context</option>
+            <option value="global">Everywhere</option>
+          </select>
+        </label>
+
+        <button id="read-later" class="primary wide">Send to Read Later</button>
+
+        <div class="shelf-row">
+          <span><i aria-hidden="true"></i> Read Later</span>
+          <strong id="read-later-count">0</strong>
+        </div>
+      </section>
+
+      <footer>
+        <button id="settings" class="text-button">Settings</button>
+        <span id="message" role="status"></span>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

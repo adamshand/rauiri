@@ -1,0 +1,149 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  attentionForNewTab,
+  contextForNewTab,
+  createInitialState,
+  migrateState,
+  normalizeHostname,
+  routeForUrl,
+  shouldArchiveTab,
+  shouldDiscardReadLater,
+  updateYouTubeUrl,
+} from "../src/domain.js";
+
+const NOW = Date.UTC(2026, 7, 18, 12);
+const HOUR = 60 * 60 * 1000;
+
+function tab(overrides = {}) {
+  return {
+    active: false,
+    audible: false,
+    pinned: false,
+    discarded: false,
+    lastAccessed: NOW - (13 * HOUR),
+    ...overrides,
+  };
+}
+
+function record(overrides = {}) {
+  return {
+    attention: "current",
+    pinScope: "none",
+    contextId: "personal",
+    ...overrides,
+  };
+}
+
+test("initial state starts in Personal with the agreed contexts", () => {
+  const state = createInitialState();
+  assert.equal(state.activeContextId, "personal");
+  assert.deepEqual(state.contexts.map(({ id, color }) => [id, color]), [
+    ["personal", "green"],
+    ["work", "red"],
+    ["groundtruth", "orange"],
+  ]);
+  assert.equal(state.settings.archiveAfterHours, 12);
+  assert.equal(state.settings.discardReadLaterAfterHours, 2);
+});
+
+test("migration restores required defaults without discarding custom contexts", () => {
+  const state = migrateState({
+    contexts: [{ id: "home", title: "Home", color: "cyan" }],
+    activeContextId: "missing",
+    settings: { archiveAfterHours: 24 },
+  });
+  assert.equal(state.activeContextId, "home");
+  assert.equal(state.settings.archiveAfterHours, 24);
+  assert.equal(state.settings.discardReadLaterAfterHours, 2);
+});
+
+test("hostname matching is exact and ignores only a leading www", () => {
+  const routes = [{ id: "one", hostname: "app.example.com", contextId: "work" }];
+  assert.equal(normalizeHostname("https://www.Reddit.com/r/test"), "reddit.com");
+  assert.equal(routeForUrl(routes, "https://app.example.com/jobs")?.contextId, "work");
+  assert.equal(routeForUrl(routes, "https://other.example.com/jobs"), null);
+});
+
+test("new tabs prefer strict routes, then opener, then active context", () => {
+  assert.equal(contextForNewTab({
+    route: { contextId: "work" },
+    openerRecord: { contextId: "personal" },
+    activeContextId: "groundtruth",
+  }), "work");
+
+  assert.equal(contextForNewTab({
+    openerRecord: { contextId: "personal" },
+    activeContextId: "groundtruth",
+  }), "personal");
+
+  assert.equal(contextForNewTab({ activeContextId: "groundtruth" }), "groundtruth");
+});
+
+test("children of global pins use the active context", () => {
+  assert.equal(contextForNewTab({
+    openerRecord: { contextId: "personal", pinScope: "global" },
+    activeContextId: "work",
+  }), "work");
+});
+
+test("children of Read Later tabs remain in Read Later", () => {
+  assert.equal(attentionForNewTab({ attention: "readLater" }), "readLater");
+  assert.equal(attentionForNewTab({ attention: "current" }), "current");
+});
+
+test("ordinary tabs archive after twelve hours", () => {
+  assert.equal(shouldArchiveTab({
+    tab: tab(),
+    record: record(),
+    route: null,
+    now: NOW,
+    archiveAfterHours: 12,
+  }), true);
+
+  assert.equal(shouldArchiveTab({
+    tab: tab({ lastAccessed: NOW - (11 * HOUR) }),
+    record: record(),
+    route: null,
+    now: NOW,
+    archiveAfterHours: 12,
+  }), false);
+});
+
+test("active, audible, pinned, routed, and already-shelved tabs do not auto-archive", () => {
+  const candidates = [
+    { tab: tab({ active: true }), record: record(), route: null },
+    { tab: tab({ audible: true }), record: record(), route: null },
+    { tab: tab({ pinned: true }), record: record(), route: null },
+    { tab: tab(), record: record({ pinScope: "context" }), route: null },
+    { tab: tab(), record: record(), route: { contextId: "work" } },
+    { tab: tab(), record: record({ attention: "readLater" }), route: null },
+  ];
+
+  for (const candidate of candidates) {
+    assert.equal(shouldArchiveTab({ ...candidate, now: NOW, archiveAfterHours: 12 }), false);
+  }
+});
+
+test("Read Later tabs discard after two idle hours but not while active or audible", () => {
+  assert.equal(shouldDiscardReadLater({
+    tab: tab({ lastAccessed: NOW - (3 * HOUR) }),
+    record: record({ attention: "readLater" }),
+    now: NOW,
+    discardAfterHours: 2,
+  }), true);
+
+  assert.equal(shouldDiscardReadLater({
+    tab: tab({ active: true, lastAccessed: NOW - (3 * HOUR) }),
+    record: record({ attention: "readLater" }),
+    now: NOW,
+    discardAfterHours: 2,
+  }), false);
+});
+
+test("YouTube state is made durable in the URL", () => {
+  const updated = new URL(updateYouTubeUrl("https://www.youtube.com/watch?v=abc&t=20s", 1247.8));
+  assert.equal(updated.searchParams.get("v"), "abc");
+  assert.equal(updated.searchParams.get("t"), "1247s");
+  assert.equal(updateYouTubeUrl("https://example.com/watch?v=abc", 60), "https://example.com/watch?v=abc");
+});

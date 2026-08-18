@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "6f2e5e5d",
+  "kind": "idea",
+  "title": "Archive very old Read Later tabs to Readeck or Linkding",
+  "intent": "Consider a later lifecycle stage that saves Read Later tabs older than a configurable age to a self-hosted read-it-later/bookmark service, then removes the browser tabs. This must remain opt-in and preserve the project's no-surprise data-loss contract.",
+  "checklist": [
+    {
+      "text": "Compare Readeck and Linkding APIs and preserved page metadata",
+      "done": false
+    },
+    {
+      "text": "Define age threshold, confirmation/undo, and failure behavior",
+      "done": false
+    },
+    {
+      "text": "Only close a tab after remote archival has been verified",
+      "done": false
+    }
+  ],
+  "created_in_session_id": "01a01286-c42f-7c57-a323-20024f18dc7c",
+  "created_at": "2026-08-18T04:24:55.002Z",
+  "updated_at": "2026-08-18T04:24:55.002Z"
+}
