@@ -61,20 +61,42 @@ export function migrateState(value) {
   };
 }
 
-export function normalizeHostname(input) {
+function rawHostname(input) {
   if (!input) return "";
   try {
-    const candidate = input.includes("://") ? input : `https://${input}`;
-    return new URL(candidate).hostname.toLowerCase().replace(/^www\./, "");
+    const value = String(input).trim();
+    const candidate = value.includes("://") ? value : `https://${value}`;
+    return new URL(candidate).hostname.toLowerCase().replace(/^%2a\./, "*.").replace(/\.$/, "");
   } catch {
-    return String(input).trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+    return String(input).trim().toLowerCase().replace(/\.$/, "");
   }
 }
 
+export function normalizeHostname(input) {
+  return rawHostname(input).replace(/^www\./, "");
+}
+
+export function cleanHostnameInput(value) {
+  const hostname = rawHostname(value);
+  if (hostname.startsWith("*.")) return `*.${hostname.slice(2)}`;
+  return hostname.replace(/^www\./, "");
+}
+
 export function routeForUrl(routes, url) {
-  const hostname = normalizeHostname(url);
+  const hostname = rawHostname(url);
   if (!hostname) return null;
-  return routes.find((route) => normalizeHostname(route.hostname) === hostname) || null;
+
+  const exactHostname = hostname.replace(/^www\./, "");
+  const exact = routes.find((route) => {
+    const pattern = cleanHostnameInput(route.hostname);
+    return !pattern.startsWith("*.") && pattern === exactHostname;
+  });
+  if (exact) return exact;
+
+  return routes
+    .map((route) => ({ route, pattern: cleanHostnameInput(route.hostname) }))
+    .filter(({ pattern }) => pattern.startsWith("*.") && hostname.endsWith(pattern.slice(1)))
+    .sort((left, right) => right.pattern.length - left.pattern.length)[0]?.route || null;
 }
 
 export function isRoutableUrl(url) {
@@ -133,10 +155,6 @@ export function updateYouTubeUrl(url, seconds) {
 
 export function hours(value) {
   return Number(value) * 60 * 60 * 1000;
-}
-
-export function cleanHostnameInput(value) {
-  return normalizeHostname(value);
 }
 
 export function makeRecord({ tab, contextId, attention = "current", pinScope = "none", originContextId = null }) {

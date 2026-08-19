@@ -265,15 +265,26 @@ async function presentTab(tab, record) {
     return;
   }
 
-  if (record.pinScope === "context" && record.contextId === state.activeContextId && record.attention !== "readLater") {
-    await ungroupTab(tab);
-    await setPinned(tab, true);
-    return;
-  }
-
   tab = await setPinned(tab, false);
   const key = record.attention === "readLater" ? READ_LATER_ID : record.contextId;
   const groupId = await ensureGroup(key, [tab.id]);
+
+  // Chromium cannot keep a native pinned tab inside a group, and an all-pinned
+  // context loses its group entirely. Context pins therefore stay at the front
+  // of their group and gain persistence without entering the global pin strip.
+  if (record.pinScope === "context" && record.attention !== "readLater" && Number.isInteger(groupId)) {
+    try {
+      const groupTabs = await chrome.tabs.query({ windowId: state.managedWindowId, groupId });
+      const firstIndex = Math.min(...groupTabs.map((candidate) => candidate.index));
+      const current = await chrome.tabs.get(tab.id);
+      if (Number.isFinite(firstIndex) && current.index !== firstIndex) {
+        await chrome.tabs.move(tab.id, { index: firstIndex });
+      }
+    } catch {
+      // A concurrent group change can make the ordering operation unnecessary.
+    }
+  }
+
   if (Number.isInteger(groupId) && key !== state.activeContextId && !tab.active) {
     try { await chrome.tabGroups.update(groupId, { collapsed: true }); } catch { /* transient */ }
   }
@@ -430,12 +441,29 @@ async function applyRouting(tab, record) {
 }
 
 async function moveTabToContext(tabId, contextId) {
-  const tab = await chrome.tabs.get(tabId);
+  let tab = await chrome.tabs.get(tabId);
   const record = await ensureRecord(tab);
   const route = routeForUrl(state.routes, tab.url);
   if (route && route.contextId !== contextId) {
     record.routeSuppressedHostname = normalizeHostname(tab.url);
   }
+
+  // Filing the active tab into another context should not take the user there.
+  // Activate a local fallback before moving the tab so the current context stays put.
+  if (tab.active && contextId !== state.activeContextId) {
+    const fallback = await fallbackTabForContext(state.activeContextId, tabId);
+    if (fallback) {
+      await chrome.tabs.update(fallback.id, { active: true });
+    } else {
+      const created = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
+      const createdRecord = makeRecord({ tab: created, contextId: state.activeContextId });
+      state.records[createdRecord.id] = createdRecord;
+      tabRecords.set(created.id, createdRecord.id);
+      await presentTab(created, createdRecord);
+    }
+    tab = await chrome.tabs.get(tabId);
+  }
+
   record.contextId = contextId;
   record.originContextId = contextId;
   record.attention = "current";
@@ -463,15 +491,21 @@ async function captureYouTubeTimestamp(tab) {
   return tab.url;
 }
 
-async function fallbackTabFor(record, excludedTabId) {
+async function fallbackTabForContext(contextId, excludedTabId) {
   const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
   return tabs
     .filter((tab) => {
       if (tab.id === excludedTabId) return false;
       const candidate = recordForTab(tab.id);
-      return candidate?.attention === "current" && candidate.contextId === record.contextId;
+      return candidate?.attention === "current"
+        && candidate.pinScope !== "global"
+        && candidate.contextId === contextId;
     })
     .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
+}
+
+async function fallbackTabFor(record, excludedTabId) {
+  return fallbackTabForContext(record.contextId, excludedTabId);
 }
 
 async function moveTabToReadLater(tabId) {
@@ -637,8 +671,9 @@ async function saveContexts(contexts) {
 
 async function addRoute(hostname, contextId, moveExisting = true) {
   const clean = cleanHostnameInput(hostname);
-  if (!clean || !/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(clean)) {
-    throw new Error("Enter a hostname such as app.example.com.");
+  const host = clean.startsWith("*.") ? clean.slice(2) : clean;
+  if (!host || !/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(host)) {
+    throw new Error("Enter a hostname such as app.example.com or *.example.com.");
   }
   if (!contextById(contextId)) throw new Error("Choose a context.");
 
@@ -650,7 +685,7 @@ async function addRoute(hostname, contextId, moveExisting = true) {
   if (moveExisting && state.managedWindowId !== null) {
     const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
     for (const tab of tabs) {
-      if (normalizeHostname(tab.url) !== clean) continue;
+      if (!routeForUrl([route], tab.url)) continue;
       const record = await ensureRecord(tab);
       if (record.attention === "readLater") continue;
       record.contextId = contextId;
@@ -732,6 +767,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         record.pinScope = "context";
         record.contextId = state.activeContextId;
         record.attention = "current";
+        await presentTab(tab, record);
       } else if (record.pinScope !== "none") {
         record.pinScope = "none";
         await presentTab(tab, record);

@@ -20,11 +20,11 @@ Adoption intentionally puts every ordinary tab in **Personal** and treats existi
 
 - Change context from the dropdown in the extension popup, or expand a context group in the tab strip. Context groups behave like an accordion.
 - Assign the current tab to a different context from **Belongs to**.
-- Choose whether a tab is unpinned, pinned in its context, or pinned everywhere.
+- Choose whether a tab is unpinned, kept at the front of its context group, or pinned everywhere.
 - Send unfinished browsing to **Read Later** from the popup.
-- Open **Settings** to rename/recolour contexts, create exact-host routing rules, or tune lifecycle delays.
+- Open **Settings** to rename/recolour contexts, create exact-host or `*.example.com` routing rules, or tune lifecycle delays.
 
-Strict routes are intended only for sites that always belong to one context. A routed hostname is also protected from automatic shelving. Ambiguous sites should inherit from their opener or the current context instead.
+Strict routes are intended only for sites that always belong to one context. Wildcards match subdomains at any depth but not the apex hostname; exact routes take priority. A routed hostname is also protected from automatic shelving. Ambiguous sites should inherit from their opener or the current context instead.
 
 ## Automatic lifecycle
 

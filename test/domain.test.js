@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   attentionForNewTab,
+  cleanHostnameInput,
   contextForNewTab,
   createInitialState,
   migrateState,
@@ -63,6 +64,29 @@ test("hostname matching is exact and ignores only a leading www", () => {
   assert.equal(normalizeHostname("https://www.Reddit.com/r/test"), "reddit.com");
   assert.equal(routeForUrl(routes, "https://app.example.com/jobs")?.contextId, "work");
   assert.equal(routeForUrl(routes, "https://other.example.com/jobs"), null);
+});
+
+test("wildcard routes match subdomains but not the apex or lookalike domains", () => {
+  const routes = [{ id: "wild", hostname: "*.hnry.io", contextId: "work" }];
+  assert.equal(cleanHostnameInput("HTTPS://*.HNRY.IO/path"), "*.hnry.io");
+  assert.equal(cleanHostnameInput("https://%2a.hnry.io"), "*.hnry.io");
+  assert.equal(routeForUrl(routes, "https://app.hnry.io")?.id, "wild");
+  assert.equal(routeForUrl(routes, "https://deep.app.hnry.io")?.id, "wild");
+  assert.equal(routeForUrl(routes, "https://www.hnry.io")?.id, "wild");
+  assert.equal(routeForUrl(routes, "https://hnry.io"), null);
+  assert.equal(routeForUrl(routes, "https://fakehnry.io"), null);
+  assert.equal(routeForUrl(routes, "https://hnry.io.attacker.example"), null);
+});
+
+test("exact routes beat wildcards and the most specific wildcard wins", () => {
+  const routes = [
+    { id: "broad", hostname: "*.example.com", contextId: "personal" },
+    { id: "specific", hostname: "*.work.example.com", contextId: "work" },
+    { id: "exact", hostname: "app.work.example.com", contextId: "groundtruth" },
+  ];
+  assert.equal(routeForUrl(routes, "https://app.work.example.com")?.id, "exact");
+  assert.equal(routeForUrl(routes, "https://other.work.example.com")?.id, "specific");
+  assert.equal(routeForUrl(routes, "https://elsewhere.example.com")?.id, "broad");
 });
 
 test("new tabs prefer strict routes, then opener, then active context", () => {

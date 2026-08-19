@@ -1,3 +1,5 @@
+import { cleanHostnameInput, routeForUrl } from "../src/domain.js";
+
 const GROUP_COLORS = [
   ["grey", "Grey"],
   ["blue", "Blue"],
@@ -62,7 +64,10 @@ function renderContexts() {
     const down = row.querySelector(".move-down");
 
     title.value = context.title;
-    title.addEventListener("input", () => { context.title = title.value; });
+    title.addEventListener("input", () => {
+      context.title = title.value;
+      renderContextSelect();
+    });
     color.replaceChildren(...GROUP_COLORS.map(([value, label]) => new Option(label, value, false, value === context.color)));
     color.addEventListener("change", () => { context.color = color.value; });
 
@@ -87,7 +92,11 @@ function moveContext(from, to) {
 }
 
 function renderContextSelect() {
+  const selectedContextId = ui.routeContext.value;
   ui.routeContext.replaceChildren(...contexts.map((context) => new Option(context.title, context.id)));
+  if (contexts.some((context) => context.id === selectedContextId)) {
+    ui.routeContext.value = selectedContextId;
+  }
 }
 
 function renderRoutes() {
@@ -157,15 +166,16 @@ ui.saveContexts.addEventListener("click", () => perform("Saving contexts…", as
   await send("saveContexts", { contexts });
   await refreshSnapshot();
   contexts = snapshot.contexts.map((context) => ({ ...context }));
+  renderContextSelect();
 }));
 
 ui.routeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   let moveExisting = ui.moveExisting.checked;
   if (moveExisting && snapshot.managedWindowId !== null) {
-    const cleanHost = normalizeHost(ui.routeHost.value);
+    const pattern = cleanHostnameInput(ui.routeHost.value);
     const tabs = await chrome.tabs.query({ windowId: snapshot.managedWindowId });
-    const matching = tabs.filter((tab) => normalizeHost(tab.url) === cleanHost).length;
+    const matching = tabs.filter((tab) => routeForUrl([{ hostname: pattern }], tab.url)).length;
     if (matching > 0) {
       moveExisting = window.confirm(`Move ${matching} existing matching tab${matching === 1 ? "" : "s"} into this context?`);
     }
@@ -181,15 +191,6 @@ ui.routeForm.addEventListener("submit", async (event) => {
     await refreshSnapshot();
   });
 });
-
-function normalizeHost(value) {
-  try {
-    const candidate = String(value || "").includes("://") ? value : `https://${value}`;
-    return new URL(candidate).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
 
 ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", async () => {
   await send("saveSettings", {

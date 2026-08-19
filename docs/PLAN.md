@@ -42,9 +42,7 @@ The initial contexts are:
 
 Contexts will ultimately have configurable names, colours, and stable ordering. Only one is active at a time. Its native tab group is expanded while inactive context groups are collapsed.
 
-Native groups in the managed window are reserved for Rauiri contexts because Chromium does not support nested groups. Manual expanding and collapsing is allowed, but arbitrary grouping may be normalized on the next context switch or maintenance pass.
-
-Rauiri should not continuously fight manual tab-strip changes. It restores the intended layout during explicit context switches, startup recovery, and maintenance.
+Native groups in the managed window are reserved for Rauiri contexts because Chromium does not support nested groups. They behave like an accordion: expanding one Rauiri group collapses the others and expanding a context makes it active. Arbitrary grouping may be normalized on the next context switch or maintenance pass.
 
 ### Context inheritance
 
@@ -57,13 +55,16 @@ A new tab receives its context in this order:
 
 This keeps research trails together without trying to infer intent from page content. Ambiguous sites such as Reddit, X, Facebook, YouTube, and ChatGPT should not receive automatic context rules merely from observed use.
 
+Manually filing the active tab into another context leaves the user in the current context by activating its most-recent local tab, or a new tab when no fallback exists.
+
 ### Routing rules
 
 Routing is strict but entirely opt-in. It is intended for unambiguous sites such as Hnry or a company control panel.
 
 For the prototype:
 
-- Rules match exact hostnames.
+- Rules match exact hostnames or an explicit leading wildcard such as `*.hnry.io`.
+- A wildcard matches subdomains at any depth but not the apex hostname; exact rules take priority, followed by the most-specific wildcard.
 - A rule applies when a tab is created or its top-level hostname changes.
 - A rule assigns the site to one context.
 - A routed domain is also persistent and does not age into Read Later automatically.
@@ -71,7 +72,7 @@ For the prototype:
 - If an active tab enters a site routed to an inactive context, Rauiri initially switches to that context with the tab. Whether this is helpful or annoying is an explicit prototype experiment.
 - Background tabs move without changing the active context.
 
-Wildcard subdomains may be added later. Path-level rules are deferred until real usage demonstrates a need.
+Path-level rules are deferred until real usage demonstrates a need.
 
 A site used in several contexts should normally have no routing rule. ChatGPT, for example, is better represented by a global pin; tabs opened from it inherit the active context.
 
@@ -79,10 +80,10 @@ A site used in several contexts should normally have no routing rule. ChatGPT, f
 
 Rauiri supports:
 
-- **Global pins**, such as ChatGPT, visible in every context.
-- **Context pins**, such as Hnry in Work, pinned only while their context is active.
+- **Global pins**, such as ChatGPT, visible in every context through Chromium's native pin strip.
+- **Context pins**, such as Hnry in Work, kept at the front of their context group and protected from shelving.
 
-Pinned status and context membership remain separate. Native pinning creates a context-specific pin; “Pin globally” is a separate Rauiri action. Native unpinning returns the tab to normal status in its existing context.
+Chromium cannot place a native pinned tab inside a group, and removing every tab from a group deletes the group. Rauiri therefore represents context pins as persistent, first-in-group tabs rather than moving them into the native pin strip. Native pinning is translated into this context-pin state; “Pin globally” remains a separate Rauiri action.
 
 Pinned tabs never move to Read Later automatically.
 
@@ -158,7 +159,7 @@ Build one vertical slice containing:
 3. A popup context dropdown.
 4. Parent/current-context inheritance for new tabs.
 5. Global and context-specific pins.
-6. Exact-host routing rules.
+6. Exact-host and wildcard-subdomain routing rules.
 7. Manual movement between contexts and Read Later.
 8. Hourly shelving after 12 hours idle.
 9. Read Later unloading after two hours idle.
@@ -170,7 +171,7 @@ The prototype exists to test behaviour, not polish every recovery and configurat
 ### Deferred from the prototype
 
 - Polished onboarding and ambiguous-window recovery
-- Wildcard and path-level routing rules
+- Path-level routing rules
 - Activity history and undo
 - Keyboard shortcuts
 - Import/export and configuration sync
@@ -197,7 +198,7 @@ These results should drive the next design round rather than adding speculative 
 ## Future possibilities
 
 - Separate routing from persistence if their combined prototype behaviour is too coarse.
-- Add wildcard hostname rules or path-level rules where justified.
+- Add path-level rules where justified.
 - Add recent automatic activity and “undo last move.”
 - Add keyboard switching after actual usage reveals the right interaction.
 - Export and import local configuration as JSON.
