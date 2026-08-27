@@ -1,6 +1,6 @@
 export const READ_LATER_ID = "read-later";
 export const READ_LATER_TITLE = "Read Later";
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 export const DEFAULT_CONTEXTS = Object.freeze([
   { id: "personal", title: "Personal", color: "green", order: 0 },
@@ -9,7 +9,7 @@ export const DEFAULT_CONTEXTS = Object.freeze([
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  archiveAfterHours: 12,
+  archiveAfterHours: 72,
   discardReadLaterAfterHours: 2,
 });
 
@@ -46,6 +46,14 @@ export function migrateState(value) {
     ? value.activeContextId
     : contexts[0].id;
 
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...(value.settings || {}),
+  };
+  if ((Number(value.version) || 0) < 2 && settings.archiveAfterHours === 12) {
+    settings.archiveAfterHours = 72;
+  }
+
   return {
     ...initial,
     ...value,
@@ -54,10 +62,7 @@ export function migrateState(value) {
     activeContextId,
     routes: Array.isArray(value.routes) ? value.routes : [],
     records: value.records && typeof value.records === "object" ? value.records : {},
-    settings: {
-      ...DEFAULT_SETTINGS,
-      ...(value.settings || {}),
-    },
+    settings,
   };
 }
 
@@ -134,6 +139,24 @@ export function shouldDiscardReadLater({ tab, record, now, discardAfterHours }) 
   if (tab.active || tab.audible || tab.discarded) return false;
   if (!Number.isFinite(tab.lastAccessed)) return false;
   return now - tab.lastAccessed >= hours(discardAfterHours);
+}
+
+export function findRecoverableRecords({ records, openTabs, tabRecordEntries = [] }) {
+  const openTabIds = new Set((openTabs || []).map((tab) => tab.id));
+  const associatedRecordIds = new Set(tabRecordEntries
+    .filter(([tabId, recordId]) => openTabIds.has(tabId) && records?.[recordId])
+    .map(([, recordId]) => recordId));
+  const openUrls = new Set((openTabs || []).map((tab) => tab.url || tab.pendingUrl || ""));
+  const seenUrls = new Set();
+
+  return Object.values(records || {})
+    .filter((record) => !associatedRecordIds.has(record.id) && isRoutableUrl(record.url))
+    .sort((left, right) => (right.lastSeenAt || 0) - (left.lastSeenAt || 0))
+    .filter((record) => {
+      if (openUrls.has(record.url) || seenUrls.has(record.url)) return false;
+      seenUrls.add(record.url);
+      return true;
+    });
 }
 
 export function updateYouTubeUrl(url, seconds) {

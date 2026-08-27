@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "c3f64072",
+  "kind": "todo",
+  "title": "Make Rauiri shelving less aggressive",
+  "created_at": "2026-08-26T08:28:40.488Z",
+  "updated_at": "2026-08-26T08:33:11.102Z",
+  "intent": "Change the default and existing prototype-default lifecycle from 12 hours to 72 hours without overwriting genuinely custom settings.",
+  "progress": "Default lifecycle is now 72 hours. State v2 migrates the old 12-hour prototype default while preserving other custom delays; tests and docs updated.",
+  "checklist": [
+    {
+      "text": "Migrate legacy 12-hour default to 72 hours",
+      "done": true
+    },
+    {
+      "text": "Update tests and product copy",
+      "done": true
+    }
+  ],
+  "status": "done",
+  "owner_session_id": "01a03d19-0df4-7b2a-a220-d4dca63ab946",
+  "created_in_session_id": "01a03d19-0df4-7b2a-a220-d4dca63ab946"
+}

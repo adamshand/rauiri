@@ -66,12 +66,33 @@
             <div><input id="archive-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <label>
-            <span>Unload Read Later after</span>
+            <span>Unload reopened Read Later tabs after</span>
             <div><input id="discard-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <div class="actions">
             <button id="run-sweep" class="quiet">Run sweep now</button>
             <button id="save-lifecycle" class="primary">Save lifecycle</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-copy">
+          <h2>Recovery</h2>
+          <p>Stored pages that no longer match an open browser tab. Review them here before reopening or moving them elsewhere.</p>
+        </div>
+        <div class="section-body">
+          <div class="recovery-heading">
+            <span id="recovery-count">Checking saved tabs…</span>
+            <button id="select-all-recovery" class="text-button" type="button">Select all</button>
+          </div>
+          <div id="recovery-list" class="recovery-list" aria-live="polite"></div>
+          <div class="actions recovery-actions">
+            <div>
+              <button id="copy-recovery" class="quiet" type="button" disabled>Copy URLs</button>
+              <button id="export-recovery" class="quiet" type="button" disabled>Export JSON</button>
+            </div>
+            <button id="reopen-recovery" class="primary" type="button" disabled>Reopen selected</button>
           </div>
         </div>
       </section>

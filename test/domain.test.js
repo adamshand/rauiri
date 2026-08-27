@@ -5,6 +5,7 @@ import {
   cleanHostnameInput,
   contextForNewTab,
   createInitialState,
+  findRecoverableRecords,
   migrateState,
   normalizeHostname,
   routeForUrl,
@@ -44,19 +45,23 @@ test("initial state starts in Personal with the agreed contexts", () => {
     ["work", "red"],
     ["groundtruth", "orange"],
   ]);
-  assert.equal(state.settings.archiveAfterHours, 12);
+  assert.equal(state.settings.archiveAfterHours, 72);
   assert.equal(state.settings.discardReadLaterAfterHours, 2);
 });
 
-test("migration restores required defaults without discarding custom contexts", () => {
-  const state = migrateState({
+test("migration restores defaults, upgrades the old delay, and preserves custom settings", () => {
+  const upgraded = migrateState({
+    version: 1,
     contexts: [{ id: "home", title: "Home", color: "cyan" }],
     activeContextId: "missing",
-    settings: { archiveAfterHours: 24 },
+    settings: { archiveAfterHours: 12 },
   });
-  assert.equal(state.activeContextId, "home");
-  assert.equal(state.settings.archiveAfterHours, 24);
-  assert.equal(state.settings.discardReadLaterAfterHours, 2);
+  assert.equal(upgraded.activeContextId, "home");
+  assert.equal(upgraded.settings.archiveAfterHours, 72);
+  assert.equal(upgraded.settings.discardReadLaterAfterHours, 2);
+
+  const customized = migrateState({ version: 1, settings: { archiveAfterHours: 24 } });
+  assert.equal(customized.settings.archiveAfterHours, 24);
 });
 
 test("hostname matching is exact and ignores only a leading www", () => {
@@ -116,7 +121,7 @@ test("children of Read Later tabs remain in Read Later", () => {
   assert.equal(attentionForNewTab({ attention: "current" }), "current");
 });
 
-test("ordinary tabs archive after twelve hours", () => {
+test("ordinary tabs archive after the configured delay", () => {
   assert.equal(shouldArchiveTab({
     tab: tab(),
     record: record(),
@@ -163,6 +168,27 @@ test("Read Later tabs discard after two idle hours but not while active or audib
     now: NOW,
     discardAfterHours: 2,
   }), false);
+});
+
+test("recovery lists each missing URL once and ignores URLs already open", () => {
+  const records = {
+    associated: { id: "associated", url: "https://previous.example", lastSeenAt: 4 },
+    openCopy: { id: "open-copy", url: "https://duplicate.example", lastSeenAt: 3 },
+    missingCopy: { id: "missing-copy", url: "https://duplicate.example", lastSeenAt: 2 },
+    newerMissing: { id: "newer-missing", url: "https://lost.example", lastSeenAt: 6 },
+    missing: { id: "missing", url: "https://lost.example", lastSeenAt: 1 },
+    internal: { id: "internal", url: "chrome://newtab", lastSeenAt: 5 },
+  };
+  const result = findRecoverableRecords({
+    records,
+    openTabs: [
+      { id: 10, url: "https://current.example" },
+      { id: 11, url: "https://duplicate.example" },
+    ],
+    tabRecordEntries: [[10, "associated"]],
+  });
+
+  assert.deepEqual(result.map(({ id }) => id), ["newer-missing"]);
 });
 
 test("YouTube state is made durable in the URL", () => {

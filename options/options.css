@@ -175,6 +175,58 @@ label > span {
 .route-row span { color: var(--muted); font-size: 12px; }
 .empty { padding: 18px 0; color: var(--muted); font-size: 12px; }
 
+.recovery-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.text-button {
+  min-height: auto;
+  padding: 5px 0;
+  color: var(--accent);
+  background: transparent;
+}
+.text-button:hover { color: var(--ink); }
+.recovery-list { max-height: 390px; overflow-y: auto; }
+.recovery-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 13px 4px 13px 0;
+  border-bottom: 1px solid var(--line);
+  animation: enter 180ms ease-out both;
+}
+.recovery-row input { width: 15px; height: 15px; margin: 3px 0 0; accent-color: var(--accent); }
+.recovery-page { min-width: 0; }
+.recovery-title {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recovery-url {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--muted);
+  font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recovery-meta { color: var(--muted); font-size: 10px; line-height: 1.5; text-align: right; }
+.recovery-meta strong { display: block; color: var(--ink); font-weight: 700; }
+.recovery-actions > div { display: flex; gap: 8px; }
+
 .lifecycle { display: grid; gap: 19px; }
 .lifecycle label {
   display: grid;
@@ -207,6 +259,11 @@ footer {
   section { grid-template-columns: 1fr; gap: 24px; }
   .route-form { grid-template-columns: 1fr; }
   .route-form .primary { justify-self: stretch; }
+  .recovery-row { grid-template-columns: 22px minmax(0, 1fr); }
+  .recovery-meta { display: none; }
+  .recovery-actions { align-items: stretch; flex-direction: column; }
+  .recovery-actions > div { display: grid; grid-template-columns: 1fr 1fr; }
+  .recovery-actions button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

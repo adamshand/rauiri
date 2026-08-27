@@ -30,9 +30,9 @@ Strict routes are intended only for sites that always belong to one context. Wil
 
 Once per hour Rauiri:
 
-- moves eligible ordinary tabs to Read Later after 12 hours idle;
+- moves eligible ordinary tabs to Read Later after 72 hours idle;
 - leaves active, audible, pinned, and strictly routed tabs alone; and
-- unloads Read Later tabs after another 2 hours idle.
+- unloads tabs as they enter Read Later, then unloads reopened shelf tabs after 2 hours idle.
 
 YouTube playback position is written into the URL before shelving or unloading when the page permits it. Rauiri never closes tabs automatically.
 
@@ -41,7 +41,8 @@ YouTube playback position is written into the URL before shelving or unloading w
 - Native tab groups in the managed window are reserved for contexts.
 - Active navigation into a strictly routed hostname switches to that hostname’s context. This is intentionally experimental.
 - Managed-window recovery uses the distinctive Rauiri groups and known tabs because Chromium does not provide stable window IDs across restarts.
-- The prototype has no activity history or undo yet; incorrectly shelved tabs can be returned from Read Later manually.
+- Recovery in Settings lists stored web pages that no longer match an open tab; selected records can be copied, exported, or reopened.
+- This is a recovery snapshot rather than a full activity history: it records the latest known tab state, not every movement event.
 - All state is stored locally through Chromium extension storage.
 
 ## Development

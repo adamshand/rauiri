@@ -92,7 +92,7 @@ Pinned tabs never move to Read Later automatically.
 **Read Later is a shelf, not a context.** It is cold storage for unfinished browsing and has a fixed neutral grey identity.
 
 - Tabs may be sent there manually.
-- An hourly sweep sends eligible tabs there after approximately 12 hours without being accessed.
+- An hourly sweep sends eligible tabs there after approximately 72 hours without being accessed.
 - Missed sweeps run when a sleeping laptop wakes, so no special overnight event is required.
 - Active, audible, pinned, and strictly routed tabs are excluded from automatic shelving.
 - All other ordinary tabs are archivable by default.
@@ -101,7 +101,7 @@ Pinned tabs never move to Read Later automatically.
 - Opening a Read Later tab does not restore it to an active context.
 - Returning a tab to its originating context is an explicit action.
 - Tabs opened from a Read Later item inherit both its originating context and its Read Later state.
-- Read Later tabs that become idle again are unloaded by the hourly sweep after roughly two hours.
+- Tabs are unloaded as they enter Read Later. If a shelved tab is reopened without being restored, the hourly sweep unloads it again after roughly two hours.
 - Read Later has unlimited retention and never deletes tabs automatically.
 
 When an active tab is sent to Read Later, Rauiri activates the most recently used tab in the same context, then a context pin, then a new tab if necessary.
@@ -161,8 +161,8 @@ Build one vertical slice containing:
 5. Global and context-specific pins.
 6. Exact-host and wildcard-subdomain routing rules.
 7. Manual movement between contexts and Read Later.
-8. Hourly shelving after 12 hours idle.
-9. Read Later unloading after two hours idle.
+8. Hourly shelving after 72 hours idle.
+9. Immediate unloading on entry to Read Later, then unloading reopened shelf tabs after two hours idle.
 10. YouTube timestamp preservation.
 11. Local persistence across ordinary browser restarts.
 
@@ -186,7 +186,7 @@ Dogfood the prototype for roughly one week and evaluate:
 
 - Does Helium's collapsed-group UI provide enough visual separation?
 - Does automatic context switching for an actively routed tab help or annoy?
-- Does the 12-hour sweep remove noise without hiding tabs too early?
+- Does the 72-hour sweep remove noise without hiding tabs too early?
 - Is the two-hour Read Later unloading delay appropriate?
 - Are global and context pins stable and predictable during switches?
 - Does Read Later feel like relief rather than another backlog?

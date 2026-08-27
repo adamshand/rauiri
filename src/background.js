@@ -5,6 +5,7 @@ import {
   cleanHostnameInput,
   contextForNewTab,
   createInitialState,
+  findRecoverableRecords,
   makeRecord,
   migrateState,
   normalizeHostname,
@@ -181,13 +182,6 @@ async function reconcileManagedWindow() {
 function recordForTab(tabId) {
   const recordId = tabRecords.get(tabId);
   return recordId ? state.records[recordId] || null : null;
-}
-
-function tabIdForRecord(recordId) {
-  for (const [tabId, candidate] of tabRecords.entries()) {
-    if (candidate === recordId) return tabId;
-  }
-  return null;
 }
 
 async function ensureRecord(tab) {
@@ -478,11 +472,20 @@ async function captureYouTubeTimestamp(tab) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => document.querySelector("video")?.currentTime || 0,
+      func: () => {
+        const video = document.querySelector("video");
+        const seconds = video?.currentTime || 0;
+        video?.pause();
+        return seconds;
+      },
     });
     const nextUrl = updateYouTubeUrl(tab.url, Number(result));
     if (nextUrl && nextUrl !== tab.url) {
-      await muteTab(tab.id, () => chrome.tabs.update(tab.id, { url: nextUrl }));
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (url) => history.replaceState(history.state, "", url),
+        args: [nextUrl],
+      });
       return nextUrl;
     }
   } catch {
@@ -504,27 +507,29 @@ async function fallbackTabForContext(contextId, excludedTabId) {
     .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
 }
 
-async function fallbackTabFor(record, excludedTabId) {
-  return fallbackTabForContext(record.contextId, excludedTabId);
+async function discardTab(tabId) {
+  try {
+    await chrome.tabs.discard(tabId);
+  } catch {
+    // A tab can become active or otherwise undiscardable while an operation is in flight.
+  }
 }
 
 async function moveTabToReadLater(tabId) {
   let tab = await chrome.tabs.get(tabId);
   const record = await ensureRecord(tab);
   const wasActive = tab.active;
-  const previousContextId = record.contextId;
   record.originContextId = record.contextId;
   record.attention = "readLater";
   record.pinScope = "none";
   record.routeSuppressedHostname = null;
   record.url = await captureYouTubeTimestamp(tab);
-  tab = await chrome.tabs.get(tabId);
 
   if (wasActive) {
-    let fallback = await fallbackTabFor(record, tabId);
+    const fallback = await fallbackTabForContext(record.contextId, tabId);
     if (!fallback) {
       const created = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
-      const createdRecord = makeRecord({ tab: created, contextId: previousContextId });
+      const createdRecord = makeRecord({ tab: created, contextId: record.contextId });
       state.records[createdRecord.id] = createdRecord;
       tabRecords.set(created.id, createdRecord.id);
       await presentTab(created, createdRecord);
@@ -535,6 +540,7 @@ async function moveTabToReadLater(tabId) {
 
   tab = await chrome.tabs.get(tabId);
   await presentTab(tab, record);
+  await discardTab(tabId);
   await persist();
 }
 
@@ -564,7 +570,7 @@ async function runSweep() {
   const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
   const now = Date.now();
 
-  for (let tab of tabs) {
+  for (const tab of tabs) {
     const record = await ensureRecord(tab);
     const route = routeForUrl(state.routes, tab.url);
     if (shouldArchiveTab({
@@ -585,12 +591,7 @@ async function runSweep() {
       discardAfterHours: state.settings.discardReadLaterAfterHours,
     })) {
       record.url = await captureYouTubeTimestamp(tab);
-      tab = await chrome.tabs.get(tab.id);
-      try {
-        await chrome.tabs.discard(tab.id);
-      } catch {
-        // A tab can become active or otherwise undiscardable during the sweep.
-      }
+      await discardTab(tab.id);
     }
   }
   await persist();
@@ -612,7 +613,8 @@ async function currentSnapshot(windowId, tabId = null) {
     if (currentTab) currentRecord = await ensureRecord(currentTab);
   }
 
-  const readLaterCount = Object.values(state.records).filter((record) => record.attention === "readLater").length;
+  const readLaterCount = [...new Set(tabRecords.values())]
+    .filter((recordId) => state.records[recordId]?.attention === "readLater").length;
   return {
     managed,
     hasManagedWindow: state.managedWindowId !== null,
@@ -630,6 +632,54 @@ async function currentSnapshot(windowId, tabId = null) {
     } : null,
     currentRecord,
   };
+}
+
+async function recoverableRecords() {
+  return findRecoverableRecords({
+    records: state.records,
+    openTabs: await chrome.tabs.query({}),
+    tabRecordEntries: [...tabRecords.entries()],
+  });
+}
+
+async function recoverySnapshot() {
+  return (await recoverableRecords()).map((record) => ({
+    id: record.id,
+    title: record.title,
+    url: record.url,
+    contextId: record.contextId,
+    contextTitle: contextById(record.contextId)?.title || "Unknown context",
+    attention: record.attention,
+    lastSeenAt: record.lastSeenAt,
+  }));
+}
+
+async function reopenRecords(recordIds, fallbackWindowId) {
+  const requestedIds = [...new Set(Array.isArray(recordIds) ? recordIds : [])];
+  if (!requestedIds.length) throw new Error("Select at least one saved tab.");
+
+  const recoverableIds = new Set((await recoverableRecords()).map((record) => record.id));
+  let targetWindowId = state.managedWindowId;
+  if (targetWindowId === null || !await windowExists(targetWindowId)) {
+    targetWindowId = await windowExists(fallbackWindowId) ? fallbackWindowId : null;
+  }
+
+  let reopened = 0;
+  for (const recordId of requestedIds) {
+    if (!recoverableIds.has(recordId)) continue;
+    const record = state.records[recordId];
+
+    const createProperties = { url: record.url, active: false };
+    if (targetWindowId !== null) createProperties.windowId = targetWindowId;
+    const tab = await chrome.tabs.create(createProperties);
+    tabRecords.set(tab.id, record.id);
+    record.lastSeenAt = Date.now();
+    if (tab.windowId === state.managedWindowId) await presentTab(tab, record);
+    reopened += 1;
+  }
+
+  await persist();
+  return { reopened };
 }
 
 async function saveContexts(contexts) {
@@ -847,6 +897,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "runSweep":
         await runSweep();
         return { ok: true };
+      case "recoverySnapshot":
+        return recoverySnapshot();
+      case "reopenRecords":
+        return reopenRecords(message.recordIds, message.windowId);
       case "openOptions":
         await chrome.runtime.openOptionsPage();
         return { ok: true };
