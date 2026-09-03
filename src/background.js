@@ -424,6 +424,13 @@ async function switchContext(contextId, preferredTabId = null) {
   await persist();
 }
 
+async function activateMostRecentTabInGroup(group) {
+  const tabs = await chrome.tabs.query({ windowId: group.windowId, groupId: group.id });
+  if (!tabs.length || tabs.some((tab) => tab.active)) return;
+  const target = tabs.sort((left, right) => (right.lastAccessed || 0) - (left.lastAccessed || 0))[0];
+  await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
+}
+
 async function enforceAccordion(updatedGroup) {
   // Group events are queued while Rauiri is changing several groups. Re-read the
   // group so a stale "expanded" event cannot switch us back to an old context.
@@ -443,6 +450,11 @@ async function enforceAccordion(updatedGroup) {
     await switchContext(key);
     return;
   }
+
+  // Expanding a group label does not necessarily activate one of its tabs.
+  // Chromium refuses to collapse whichever group still contains the active tab,
+  // so focus the selected group before closing the others.
+  await activateMostRecentTabInGroup(expandedGroup);
   if (membershipChanged) await persist();
 
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
