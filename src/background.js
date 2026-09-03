@@ -44,20 +44,40 @@ function run(task) {
   return operation;
 }
 
-function runEvent(task) {
-  void run(task).catch((error) => console.warn("Rauiri browser event failed:", error));
+function runEvent(task, allowRetry = true) {
+  void run(task).catch((error) => {
+    console.warn("Rauiri browser event failed:", error);
+    if (allowRetry && isTransientBrowserEdit(error)) {
+      setTimeout(() => runEvent(task, false), 500);
+    }
+  });
 }
 
 function isTransientBrowserEdit(error) {
-  return /cannot be edited right now/i.test(error?.message || String(error));
+  return /cannot be edited right now|browser edit timed out/i.test(error?.message || String(error));
 }
 
-async function retryBrowserEdit(task, attempts = 12) {
+async function browserEditAttempt(task, timeoutMs = 1000) {
+  let timeout;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Browser edit timed out.")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function retryBrowserEdit(task, attempts = 4) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await task();
+      return await browserEditAttempt(task);
     } catch (error) {
-      if (!isTransientBrowserEdit(error) || attempt === attempts) throw error;
+      if (/browser edit timed out/i.test(error?.message || "")
+        || !isTransientBrowserEdit(error) || attempt === attempts) throw error;
       await new Promise((resolve) => setTimeout(resolve, 125));
     }
   }
