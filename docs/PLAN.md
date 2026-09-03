@@ -78,14 +78,9 @@ A site used in several contexts should normally have no routing rule. ChatGPT, f
 
 ### Pins
 
-Rauiri supports:
+Rauiri supports Chromium’s native global pins, such as ChatGPT, which stay visible in every context through the native pin strip. Pinning and unpinning use the browser’s normal tab-menu actions.
 
-- **Global pins**, such as ChatGPT, visible in every context through Chromium's native pin strip.
-- **Context pins**, such as Hnry in Work, kept at the front of their context group and protected from shelving.
-
-Chromium cannot place a native pinned tab inside a group, and removing every tab from a group deletes the group. Rauiri therefore represents context pins as persistent, first-in-group tabs rather than moving them into the native pin strip. Native pinning is translated into this context-pin state; “Pin globally” remains a separate Rauiri action.
-
-Pinned tabs never move to Read Later automatically.
+Context-specific pins are intentionally unsupported: Chromium cannot place a compact native pin inside a tab group, and simulating one does not gain native pin behaviour. Pinned tabs never move to Read Later automatically.
 
 ### Read Later shelf
 
@@ -104,7 +99,7 @@ Pinned tabs never move to Read Later automatically.
 - Tabs are unloaded as they enter Read Later. If a shelved tab is reopened without being restored, the hourly sweep unloads it again after roughly two hours.
 - Read Later has unlimited retention and never deletes tabs automatically.
 
-When an active tab is sent to Read Later, Rauiri activates the most recently used tab in the same context, then a context pin, then a new tab if necessary.
+When an active tab is sent to Read Later, Rauiri activates the most recently used tab in the same context, then creates a new tab if necessary.
 
 ### Page state
 
@@ -158,7 +153,7 @@ Build one vertical slice containing:
 2. Personal, Work, and Groundtruth groups.
 3. A popup context dropdown.
 4. Parent/current-context inheritance for new tabs.
-5. Global and context-specific pins.
+5. Native global pins.
 6. Exact-host and wildcard-subdomain routing rules.
 7. Manual movement between contexts and Read Later.
 8. Hourly shelving after 72 hours idle.
@@ -188,7 +183,7 @@ Dogfood the prototype for roughly one week and evaluate:
 - Does automatic context switching for an actively routed tab help or annoy?
 - Does the 72-hour sweep remove noise without hiding tabs too early?
 - Is the two-hour Read Later unloading delay appropriate?
-- Are global and context pins stable and predictable during switches?
+- Are native global pins stable and predictable during switches?
 - Does Read Later feel like relief rather than another backlog?
 - Does the workflow naturally remain in one browser window?
 - How often is a tab manually corrected after automatic classification or shelving?

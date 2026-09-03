@@ -19,7 +19,6 @@ const ui = {
   workspace: document.querySelector("#workspace"),
   activeContext: document.querySelector("#active-context"),
   tabContext: document.querySelector("#tab-context"),
-  pinScope: document.querySelector("#pin-scope"),
   tabTitle: document.querySelector("#tab-title"),
   tabHost: document.querySelector("#tab-host"),
   readLater: document.querySelector("#read-later"),
@@ -83,7 +82,6 @@ function render() {
 
   ui.tabTitle.textContent = snapshot.currentTab?.title || "No active tab";
   ui.tabHost.textContent = hostname(snapshot.currentTab?.url);
-  ui.pinScope.value = snapshot.currentRecord?.pinScope || "none";
   ui.readLaterCount.textContent = String(snapshot.readLaterCount);
 
   const onShelf = snapshot.currentRecord?.attention === "readLater";
@@ -91,7 +89,6 @@ function render() {
     ? `Restore tab to ${contextTitle(snapshot.currentRecord?.originContextId)}`
     : "Send to Read Later";
   ui.tabContext.disabled = !snapshot.currentTab;
-  ui.pinScope.disabled = !snapshot.currentTab || onShelf;
   ui.readLater.disabled = !snapshot.currentTab;
 }
 
@@ -145,11 +142,6 @@ ui.activeContext.addEventListener("change", () => act("Switching…", () => send
 ui.tabContext.addEventListener("change", () => act("Moving…", () => send("moveTabToContext", {
   tabId: snapshot.currentTab.id,
   contextId: ui.tabContext.value,
-})));
-
-ui.pinScope.addEventListener("change", () => act("Updating pin…", () => send("setTabPinScope", {
-  tabId: snapshot.currentTab.id,
-  pinScope: ui.pinScope.value,
 })));
 
 ui.readLater.addEventListener("click", () => act("Moving…", async () => {

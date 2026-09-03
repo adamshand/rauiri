@@ -1,17 +1,21 @@
 import {
   READ_LATER_ID,
   READ_LATER_TITLE,
+  assignRecordToGroup,
   attentionForNewTab,
   cleanHostnameInput,
   contextForNewTab,
+  createBackup,
   createInitialState,
   findRecoverableRecords,
+  groupKeyForRecord,
   makeRecord,
   migrateState,
   normalizeHostname,
   routeForUrl,
   shouldArchiveTab,
   shouldDiscardReadLater,
+  stateFromBackup,
   updateYouTubeUrl,
 } from "./domain.js";
 
@@ -38,6 +42,26 @@ function run(task) {
     return task();
   });
   return operation;
+}
+
+function runEvent(task) {
+  void run(task).catch((error) => console.warn("Rauiri browser event failed:", error));
+}
+
+function isTransientBrowserEdit(error) {
+  return /cannot be edited right now/i.test(error?.message || String(error));
+}
+
+async function retryBrowserEdit(task, attempts = 12) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      if (!isTransientBrowserEdit(error) || attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 125));
+    }
+  }
+  return null;
 }
 
 async function initialize() {
@@ -201,11 +225,35 @@ async function ensureRecord(tab) {
     contextId,
     attention,
     originContextId: openerRecord?.originContextId || contextId,
-    pinScope: tab.pinned ? "context" : "none",
+    pinScope: tab.pinned ? "global" : "none",
   });
   state.records[record.id] = record;
   tabRecords.set(tab.id, record.id);
   return record;
+}
+
+async function syncRecordToGroup(tab, groupKey) {
+  if (groupKey !== READ_LATER_ID && !contextById(groupKey)) return false;
+  const record = await ensureRecord(tab);
+  const url = tab.url || tab.pendingUrl;
+  return assignRecordToGroup(record, {
+    groupKey,
+    route: routeForUrl(state.routes, url),
+    url,
+  });
+}
+
+async function syncGroupMembership(group) {
+  const groupKey = contextKeyForGroup(group);
+  if (!groupKey) return false;
+
+  let changed = false;
+  const tabs = await chrome.tabs.query({ windowId: group.windowId, groupId: group.id });
+  for (const tab of tabs) {
+    if (mutedTabs.has(tab.id)) continue;
+    changed = await syncRecordToGroup(tab, groupKey) || changed;
+  }
+  return changed;
 }
 
 async function muteTab(tabId, task) {
@@ -224,32 +272,33 @@ async function ensureGroup(key, tabIds) {
   let groupId = groupIds.get(key);
   try {
     if (Number.isInteger(groupId)) {
-      await chrome.tabs.group({ groupId, tabIds: ids });
+      await retryBrowserEdit(() => chrome.tabs.group({ groupId, tabIds: ids }));
     } else {
-      groupId = await chrome.tabs.group({ tabIds: ids });
+      groupId = await retryBrowserEdit(() => chrome.tabs.group({ tabIds: ids }));
       groupIds.set(key, groupId);
     }
-  } catch {
-    groupId = await chrome.tabs.group({ tabIds: ids });
+  } catch (error) {
+    if (isTransientBrowserEdit(error)) throw error;
+    groupId = await retryBrowserEdit(() => chrome.tabs.group({ tabIds: ids }));
     groupIds.set(key, groupId);
   }
 
   const context = contextById(key);
-  await chrome.tabGroups.update(groupId, {
+  await retryBrowserEdit(() => chrome.tabGroups.update(groupId, {
     title: key === READ_LATER_ID ? READ_LATER_TITLE : context?.title || "Context",
     color: key === READ_LATER_ID ? READ_LATER_COLOR : context?.color || "grey",
-  });
+  }));
   return groupId;
 }
 
 async function setPinned(tab, pinned) {
   if (tab.pinned === pinned) return tab;
-  return muteTab(tab.id, () => chrome.tabs.update(tab.id, { pinned }));
+  return muteTab(tab.id, () => retryBrowserEdit(() => chrome.tabs.update(tab.id, { pinned })));
 }
 
 async function ungroupTab(tab) {
   if (tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) return;
-  await muteTab(tab.id, () => chrome.tabs.ungroup([tab.id]));
+  await muteTab(tab.id, () => retryBrowserEdit(() => chrome.tabs.ungroup([tab.id])));
 }
 
 async function presentTab(tab, record) {
@@ -260,27 +309,18 @@ async function presentTab(tab, record) {
   }
 
   tab = await setPinned(tab, false);
-  const key = record.attention === "readLater" ? READ_LATER_ID : record.contextId;
-  const groupId = await ensureGroup(key, [tab.id]);
-
-  // Chromium cannot keep a native pinned tab inside a group, and an all-pinned
-  // context loses its group entirely. Context pins therefore stay at the front
-  // of their group and gain persistence without entering the global pin strip.
-  if (record.pinScope === "context" && record.attention !== "readLater" && Number.isInteger(groupId)) {
-    try {
-      const groupTabs = await chrome.tabs.query({ windowId: state.managedWindowId, groupId });
-      const firstIndex = Math.min(...groupTabs.map((candidate) => candidate.index));
-      const current = await chrome.tabs.get(tab.id);
-      if (Number.isFinite(firstIndex) && current.index !== firstIndex) {
-        await chrome.tabs.move(tab.id, { index: firstIndex });
-      }
-    } catch {
-      // A concurrent group change can make the ordering operation unnecessary.
-    }
+  const key = groupKeyForRecord(record);
+  let groupId = groupIds.get(key);
+  if (!Number.isInteger(groupId) || tab.groupId !== groupId) {
+    groupId = await ensureGroup(key, [tab.id]);
   }
 
   if (Number.isInteger(groupId) && key !== state.activeContextId && !tab.active) {
-    try { await chrome.tabGroups.update(groupId, { collapsed: true }); } catch { /* transient */ }
+    try {
+      await retryBrowserEdit(() => chrome.tabGroups.update(groupId, { collapsed: true }));
+    } catch {
+      // The active tab or group may have changed while this operation was queued.
+    }
   }
 }
 
@@ -289,7 +329,7 @@ async function orderGroups() {
   for (const key of desired) {
     const groupId = groupIds.get(key);
     if (!Number.isInteger(groupId)) continue;
-    try { await chrome.tabGroups.move(groupId, { index: -1 }); } catch { /* transient */ }
+    try { await retryBrowserEdit(() => chrome.tabGroups.move(groupId, { index: -1 })); } catch { /* stale group */ }
   }
 }
 
@@ -325,7 +365,7 @@ async function enforcePresentation({ activateTarget = true, preferredTabId = nul
       await presentTab(created, record);
       target = created;
     } else if (!target.active) {
-      await chrome.tabs.update(target.id, { active: true });
+      await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
     }
   }
 
@@ -337,9 +377,9 @@ async function enforcePresentation({ activateTarget = true, preferredTabId = nul
     if (!key) continue;
     const collapsed = key === READ_LATER_ID || key !== state.activeContextId;
     try {
-      await chrome.tabGroups.update(group.id, { collapsed });
+      await retryBrowserEdit(() => chrome.tabGroups.update(group.id, { collapsed }));
     } catch {
-      // Chrome can briefly reject a collapse while its active tab is moving.
+      // The active tab or group may have changed while this operation was queued.
     }
   }
 }
@@ -398,18 +438,20 @@ async function enforceAccordion(updatedGroup) {
   const key = contextKeyForGroup(expandedGroup);
   if (!key) return;
 
+  const membershipChanged = await syncGroupMembership(expandedGroup);
   if (key !== READ_LATER_ID && key !== state.activeContextId) {
     await switchContext(key);
     return;
   }
+  if (membershipChanged) await persist();
 
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
   for (const group of groups) {
     if (group.id === expandedGroup.id || group.collapsed || !contextKeyForGroup(group)) continue;
     try {
-      await chrome.tabGroups.update(group.id, { collapsed: true });
+      await retryBrowserEdit(() => chrome.tabGroups.update(group.id, { collapsed: true }));
     } catch {
-      // Chrome can briefly reject collapsing the group containing the active tab.
+      // The active tab or group may have changed while this operation was queued.
     }
   }
 }
@@ -555,16 +597,6 @@ async function restoreReadLaterTab(tabId) {
   await persist();
 }
 
-async function setTabPinScope(tabId, pinScope) {
-  const tab = await chrome.tabs.get(tabId);
-  const record = await ensureRecord(tab);
-  record.attention = "current";
-  record.pinScope = pinScope;
-  if (pinScope === "context") record.contextId = state.activeContextId;
-  await presentTab(tab, record);
-  await persist();
-}
-
 async function runSweep() {
   if (state.managedWindowId === null || !await windowExists(state.managedWindowId)) return;
   const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
@@ -628,7 +660,6 @@ async function currentSnapshot(windowId, tabId = null) {
       id: currentTab.id,
       title: currentTab.title,
       url: currentTab.url,
-      pinned: currentTab.pinned,
     } : null,
     currentRecord,
   };
@@ -640,6 +671,28 @@ async function recoverableRecords() {
     openTabs: await chrome.tabs.query({}),
     tabRecordEntries: [...tabRecords.entries()],
   });
+}
+
+function backupSnapshot() {
+  return createBackup(state, { extensionVersion: chrome.runtime.getManifest().version });
+}
+
+async function importBackup(backup) {
+  const managedWindowId = state.managedWindowId !== null && await windowExists(state.managedWindowId)
+    ? state.managedWindowId
+    : null;
+  state = stateFromBackup(backup, { managedWindowId });
+  tabRecords = new Map();
+  groupIds = new Map();
+
+  if (managedWindowId !== null) await reconcileManagedWindow();
+  else await persist();
+
+  return {
+    contexts: state.contexts.length,
+    routes: state.routes.length,
+    records: Object.keys(state.records).length,
+  };
 }
 
 async function recoverySnapshot() {
@@ -758,14 +811,14 @@ async function removeRoute(routeId) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  run(async () => {
+  runEvent(async () => {
     await ensureSweepAlarm();
     await persist();
   });
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  run(async () => {
+  runEvent(async () => {
     if (state.managedWindowId === null) await discoverManagedWindow();
     if (state.managedWindowId !== null) await reconcileManagedWindow();
     await ensureSweepAlarm();
@@ -773,15 +826,15 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SWEEP_ALARM) run(runSweep);
+  if (alarm.name === SWEEP_ALARM) runEvent(runSweep);
 });
 
 chrome.tabGroups.onUpdated.addListener((group) => {
-  run(() => enforceAccordion(group));
+  runEvent(() => enforceAccordion(group));
 });
 
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  run(async () => {
+  runEvent(async () => {
     if (windowId !== state.managedWindowId) return;
     const tab = await chrome.tabs.get(tabId);
     // Activation events can also be stale by the time queued orchestration runs.
@@ -795,7 +848,7 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 });
 
 chrome.tabs.onCreated.addListener((tab) => {
-  run(async () => {
+  runEvent(async () => {
     if (tab.windowId !== state.managedWindowId) return;
     const record = await ensureRecord(tab);
     await presentTab(tab, record);
@@ -805,23 +858,32 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  run(async () => {
+  runEvent(async () => {
     if (tab.windowId !== state.managedWindowId) return;
     const record = await ensureRecord(tab);
     record.url = tab.url || tab.pendingUrl || record.url;
     record.title = tab.title || record.title;
     record.lastSeenAt = Date.now();
 
-    if (typeof changeInfo.pinned === "boolean" && !mutedTabs.has(tabId)) {
-      if (changeInfo.pinned) {
-        record.pinScope = "context";
-        record.contextId = state.activeContextId;
-        record.attention = "current";
-        await presentTab(tab, record);
-      } else if (record.pinScope !== "none") {
-        record.pinScope = "none";
-        await presentTab(tab, record);
+    if (Number.isInteger(changeInfo.groupId) && !mutedTabs.has(tabId)
+      && changeInfo.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+      try {
+        const group = await chrome.tabGroups.get(changeInfo.groupId);
+        const groupKey = contextKeyForGroup(group);
+        if (groupKey) await syncRecordToGroup(tab, groupKey);
+      } catch {
+        // The group may disappear before its queued tab update is handled.
       }
+    }
+
+    if (typeof changeInfo.pinned === "boolean" && !mutedTabs.has(tabId)) {
+      record.pinScope = changeInfo.pinned ? "global" : "none";
+      record.attention = "current";
+      if (!changeInfo.pinned) {
+        record.contextId = state.activeContextId;
+        record.originContextId = state.activeContextId;
+      }
+      await presentTab(tab, record);
     }
 
     if (changeInfo.url || changeInfo.status === "complete") {
@@ -832,7 +894,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
-  run(async () => {
+  runEvent(async () => {
     const recordId = tabRecords.get(tabId);
     tabRecords.delete(tabId);
     if (recordId && !removeInfo.isWindowClosing) delete state.records[recordId];
@@ -841,7 +903,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
-  run(async () => {
+  runEvent(async () => {
     if (windowId !== state.managedWindowId) return;
     state.managedWindowId = null;
     tabRecords = new Map();
@@ -870,9 +932,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "restoreReadLaterTab":
         await restoreReadLaterTab(message.tabId);
         return { ok: true };
-      case "setTabPinScope":
-        await setTabPinScope(message.tabId, message.pinScope);
-        return { ok: true };
       case "saveContexts":
         await saveContexts(message.contexts);
         return { ok: true };
@@ -899,6 +958,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true };
       case "recoverySnapshot":
         return recoverySnapshot();
+      case "exportBackup":
+        return backupSnapshot();
+      case "importBackup":
+        return importBackup(message.backup);
       case "reopenRecords":
         return reopenRecords(message.recordIds, message.windowId);
       case "openOptions":

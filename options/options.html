@@ -78,6 +78,21 @@
 
       <section>
         <div class="section-copy">
+          <h2>Backup</h2>
+          <p>Keep a portable copy before reinstalling Rauiri or moving to another browser profile.</p>
+        </div>
+        <div class="section-body backup-body">
+          <p>The backup includes contexts, routes, lifecycle settings, and saved tab records used by Recovery. Open browser tabs are not duplicated.</p>
+          <div class="actions">
+            <button id="import-backup" class="quiet" type="button">Import backup</button>
+            <button id="export-backup" class="primary" type="button">Export backup</button>
+            <input id="backup-file" type="file" accept="application/json,.json" hidden>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-copy">
           <h2>Recovery</h2>
           <p>Stored pages that no longer match an open browser tab. Review them here before reopening or moving them elsewhere.</p>
         </div>

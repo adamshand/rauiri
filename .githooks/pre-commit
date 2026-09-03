@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+if ! printf '%s\n' "$changed" | grep -Eq '^(assets/|manifest\.json$|options/|popup/|src/)'; then
+  exit 0
+fi
+
+head_version=$(git show HEAD:manifest.json 2>/dev/null | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).version))')
+staged_manifest_version=$(git show :manifest.json | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).version))')
+staged_package_version=$(git show :package.json | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).version))')
+
+if [ "$staged_manifest_version" != "$staged_package_version" ]; then
+  echo "Rauiri versions differ in staged manifest.json and package.json." >&2
+  exit 1
+fi
+
+if [ "$staged_manifest_version" = "$head_version" ]; then
+  node scripts/bump-version.js
+  git add manifest.json package.json
+fi

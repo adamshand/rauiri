@@ -1,16 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  assignRecordToGroup,
   attentionForNewTab,
   cleanHostnameInput,
   contextForNewTab,
+  createBackup,
   createInitialState,
   findRecoverableRecords,
+  groupKeyForRecord,
   migrateState,
   normalizeHostname,
   routeForUrl,
   shouldArchiveTab,
   shouldDiscardReadLater,
+  stateFromBackup,
   updateYouTubeUrl,
 } from "../src/domain.js";
 
@@ -55,13 +59,42 @@ test("migration restores defaults, upgrades the old delay, and preserves custom 
     contexts: [{ id: "home", title: "Home", color: "cyan" }],
     activeContextId: "missing",
     settings: { archiveAfterHours: 12 },
+    records: {
+      oldContextPin: { id: "oldContextPin", pinScope: "context" },
+      globalPin: { id: "globalPin", pinScope: "global" },
+    },
   });
   assert.equal(upgraded.activeContextId, "home");
   assert.equal(upgraded.settings.archiveAfterHours, 72);
   assert.equal(upgraded.settings.discardReadLaterAfterHours, 2);
+  assert.equal(upgraded.records.oldContextPin.pinScope, "none");
+  assert.equal(upgraded.records.globalPin.pinScope, "global");
 
   const customized = migrateState({ version: 1, settings: { archiveAfterHours: 24 } });
   assert.equal(customized.settings.archiveAfterHours, 24);
+});
+
+test("backup files round-trip configuration and recovery records without a window ID", () => {
+  const original = createInitialState();
+  original.managedWindowId = 42;
+  original.routes = [{ id: "route-1", hostname: "*.example.com", contextId: "work" }];
+  original.records = {
+    "record-1": record({ id: "record-1", contextId: "work", url: "https://app.example.com" }),
+  };
+
+  const backup = createBackup(original, {
+    extensionVersion: "0.2.0",
+    exportedAt: "2026-01-02T03:04:05.000Z",
+  });
+  assert.equal(backup.format, "rauiri-backup");
+  assert.equal(backup.state.managedWindowId, undefined);
+
+  const restored = stateFromBackup(backup, { managedWindowId: 77 });
+  assert.equal(restored.managedWindowId, 77);
+  assert.deepEqual(restored.contexts, original.contexts);
+  assert.deepEqual(restored.routes, original.routes);
+  assert.deepEqual(restored.records, original.records);
+  assert.throws(() => stateFromBackup({ format: "something-else" }), /supported Rauiri backup/);
 });
 
 test("hostname matching is exact and ignores only a leading www", () => {
@@ -121,6 +154,24 @@ test("children of Read Later tabs remain in Read Later", () => {
   assert.equal(attentionForNewTab({ attention: "current" }), "current");
 });
 
+test("native group moves update context, routing suppression, and Read Later state", () => {
+  const moved = record({ contextId: "personal", originContextId: "personal" });
+  assert.equal(assignRecordToGroup(moved, {
+    groupKey: "work",
+    route: { contextId: "personal" },
+    url: "https://www.example.com/page",
+  }), true);
+  assert.equal(groupKeyForRecord(moved), "work");
+  assert.equal(moved.originContextId, "work");
+  assert.equal(moved.routeSuppressedHostname, "example.com");
+
+  assert.equal(assignRecordToGroup(moved, { groupKey: "work" }), false);
+  assert.equal(assignRecordToGroup(moved, { groupKey: "read-later" }), true);
+  assert.equal(groupKeyForRecord(moved), "read-later");
+  assert.equal(moved.originContextId, "work");
+  assert.equal(moved.pinScope, "none");
+});
+
 test("ordinary tabs archive after the configured delay", () => {
   assert.equal(shouldArchiveTab({
     tab: tab(),
@@ -144,7 +195,7 @@ test("active, audible, pinned, routed, and already-shelved tabs do not auto-arch
     { tab: tab({ active: true }), record: record(), route: null },
     { tab: tab({ audible: true }), record: record(), route: null },
     { tab: tab({ pinned: true }), record: record(), route: null },
-    { tab: tab(), record: record({ pinScope: "context" }), route: null },
+    { tab: tab(), record: record({ pinScope: "global" }), route: null },
     { tab: tab(), record: record(), route: { contextId: "work" } },
     { tab: tab(), record: record({ attention: "readLater" }), route: null },
   ];

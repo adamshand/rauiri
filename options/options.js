@@ -26,6 +26,9 @@ const ui = {
   discardHours: document.querySelector("#discard-hours"),
   saveLifecycle: document.querySelector("#save-lifecycle"),
   runSweep: document.querySelector("#run-sweep"),
+  importBackup: document.querySelector("#import-backup"),
+  exportBackup: document.querySelector("#export-backup"),
+  backupFile: document.querySelector("#backup-file"),
   recoveryCount: document.querySelector("#recovery-count"),
   recoveryList: document.querySelector("#recovery-list"),
   selectAllRecovery: document.querySelector("#select-all-recovery"),
@@ -51,6 +54,15 @@ function makeElement(tagName, className, textContent) {
   if (className) element.className = className;
   if (textContent !== undefined) element.textContent = textContent;
   return element;
+}
+
+function downloadJson(value, filename) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
 
 async function load() {
@@ -291,6 +303,38 @@ ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", 
 
 ui.runSweep.addEventListener("click", () => perform("Running sweep…", () => send("runSweep")));
 
+ui.exportBackup.addEventListener("click", () => perform("Preparing backup…", async () => {
+  const backup = await send("exportBackup");
+  downloadJson(backup, `rauiri-backup-${new Date().toISOString().slice(0, 10)}.json`);
+}, "Backup exported"));
+
+ui.importBackup.addEventListener("click", () => {
+  ui.backupFile.value = "";
+  ui.backupFile.click();
+});
+
+ui.backupFile.addEventListener("change", async () => {
+  const [file] = ui.backupFile.files;
+  if (!file) return;
+
+  try {
+    const backup = JSON.parse(await file.text());
+    const confirmed = window.confirm(
+      "Import this backup? It will replace Rauiri’s contexts, routes, lifecycle settings, and saved recovery records. Open tabs will remain open and may be reorganized.",
+    );
+    if (!confirmed) return;
+
+    perform("Importing backup…", async () => {
+      const result = await send("importBackup", { backup });
+      selectedRecoveryIds.clear();
+      await load();
+      return result;
+    }, (result) => `Imported ${result.contexts} context${result.contexts === 1 ? "" : "s"}, ${result.routes} route${result.routes === 1 ? "" : "s"}, and ${result.records} saved tab record${result.records === 1 ? "" : "s"}`);
+  } catch (error) {
+    ui.status.textContent = error instanceof SyntaxError ? "That file is not valid JSON." : error.message;
+  }
+});
+
 ui.selectAllRecovery.addEventListener("click", () => {
   const allSelected = recoveryRecords.every((record) => selectedRecoveryIds.has(record.id));
   selectedRecoveryIds.clear();
@@ -309,12 +353,7 @@ ui.copyRecovery.addEventListener("click", async () => {
 
 ui.exportRecovery.addEventListener("click", () => {
   const exported = selectedRecoveryRecords().map(({ id, ...record }) => record);
-  const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `rauiri-recovery-${new Date().toISOString().slice(0, 10)}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  downloadJson(exported, `rauiri-recovery-${new Date().toISOString().slice(0, 10)}.json`);
   ui.status.textContent = `Exported ${exported.length} saved page${exported.length === 1 ? "" : "s"}`;
 });
 

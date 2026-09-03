@@ -20,9 +20,9 @@ Adoption intentionally puts every ordinary tab in **Personal** and treats existi
 
 - Change context from the dropdown in the extension popup, or expand a context group in the tab strip. Context groups behave like an accordion.
 - Assign the current tab to a different context from **Belongs to**.
-- Choose whether a tab is unpinned, kept at the front of its context group, or pinned everywhere.
+- Use Chromium’s normal tab-menu **Pin** action for global tabs that stay visible in every context.
 - Send unfinished browsing to **Read Later** from the popup.
-- Open **Settings** to rename/recolour contexts, create exact-host or `*.example.com` routing rules, or tune lifecycle delays.
+- Open **Settings** to rename/recolour contexts, create exact-host or `*.example.com` routing rules, tune lifecycle delays, or export/import a complete Rauiri backup.
 
 Strict routes are intended only for sites that always belong to one context. Wildcards match subdomains at any depth but not the apex hostname; exact routes take priority. A routed hostname is also protected from automatic shelving. Ambiguous sites should inherit from their opener or the current context instead.
 
@@ -42,6 +42,7 @@ YouTube playback position is written into the URL before shelving or unloading w
 - Active navigation into a strictly routed hostname switches to that hostname’s context. This is intentionally experimental.
 - Managed-window recovery uses the distinctive Rauiri groups and known tabs because Chromium does not provide stable window IDs across restarts.
 - Recovery in Settings lists stored web pages that no longer match an open tab; selected records can be copied, exported, or reopened.
+- Backup files include contexts, routes, lifecycle settings, and all saved recovery records, but not the browser’s open tabs themselves.
 - This is a recovery snapshot rather than a full activity history: it records the latest known tab state, not every movement event.
 - All state is stored locally through Chromium extension storage.
 
@@ -50,9 +51,12 @@ YouTube playback position is written into the URL before shelving or unloading w
 The extension uses browser-native JavaScript modules and has no build step.
 
 ```sh
+npm run hooks:install
 npm test
 npm run check
 ```
+
+The tracked pre-commit hook patch-bumps `manifest.json` and `package.json` together whenever staged extension files change. Run `npm run version:patch` to bump them manually.
 
 After changing extension files, return to `chrome://extensions` and reload Rauiri.
 
