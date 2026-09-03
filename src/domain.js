@@ -1,10 +1,11 @@
 export const READ_LATER_ID = "read-later";
 export const READ_LATER_TITLE = "Read Later";
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 export const BACKUP_FORMAT = "rauiri-backup";
 export const BACKUP_FORMAT_VERSION = 1;
-
-const TAB_GROUP_COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
+export const TAB_GROUP_COLORS = Object.freeze([
+  "grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange",
+]);
 
 export const DEFAULT_CONTEXTS = Object.freeze([
   { id: "personal", title: "Personal", color: "green", order: 0 },
@@ -26,7 +27,6 @@ export function createInitialState() {
     routes: [],
     records: {},
     settings: { ...DEFAULT_SETTINGS },
-    adoptedAt: null,
   };
 }
 
@@ -59,17 +59,19 @@ export function migrateState(value) {
   }
 
   const storedRecords = value.records && typeof value.records === "object" ? value.records : {};
-  const records = Object.fromEntries(Object.entries(storedRecords).map(([id, record]) => [id, {
-    ...record,
-    pinScope: record?.pinScope === "global" ? "global" : "none",
-  }]));
+  const records = Object.fromEntries(Object.entries(storedRecords).map(([id, record]) => {
+    const { pinScope, ...current } = record || {};
+    return [id, {
+      ...current,
+      pinned: current.pinned === true || pinScope === "global",
+    }];
+  }));
 
   return {
-    ...initial,
-    ...value,
     version: STATE_VERSION,
-    contexts,
+    managedWindowId: Number.isInteger(value.managedWindowId) ? value.managedWindowId : null,
     activeContextId,
+    contexts,
     routes: Array.isArray(value.routes) ? value.routes : [],
     records,
     settings,
@@ -90,7 +92,6 @@ export function createBackup(state, { extensionVersion, exportedAt = new Date().
       routes: current.routes,
       records: current.records,
       settings: current.settings,
-      adoptedAt: current.adoptedAt,
     },
   };
 }
@@ -111,17 +112,14 @@ export function stateFromBackup(backup, { managedWindowId = null } = {}) {
   if (contextIds.size !== restored.contexts.length || contextTitles.size !== restored.contexts.length) {
     throw new Error("The backup contains duplicate context IDs or names.");
   }
-  if (!restored.contexts.every((context) => TAB_GROUP_COLORS.has(context.color))) {
+  if (!restored.contexts.every((context) => TAB_GROUP_COLORS.includes(context.color))) {
     throw new Error("The backup contains an invalid context colour.");
   }
 
   const routeIds = new Set(restored.routes.map((route) => route?.id));
-  const validRoute = (route) => {
-    const clean = cleanHostnameInput(route?.hostname);
-    const host = clean.startsWith("*.") ? clean.slice(2) : clean;
-    return route?.id && contextIds.has(route.contextId)
-      && /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(host);
-  };
+  const validRoute = (route) => route?.id
+    && contextIds.has(route.contextId)
+    && isValidRouteHostname(route.hostname);
   if (routeIds.size !== restored.routes.length || !restored.routes.every(validRoute)) {
     throw new Error("The backup contains an invalid routing rule.");
   }
@@ -163,6 +161,12 @@ export function cleanHostnameInput(value) {
   return hostname.replace(/^www\./, "");
 }
 
+export function isValidRouteHostname(value) {
+  const clean = cleanHostnameInput(value);
+  const host = clean.startsWith("*.") ? clean.slice(2) : clean;
+  return Boolean(host) && /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(host);
+}
+
 export function routeForUrl(routes, url) {
   const hostname = rawHostname(url);
   if (!hostname) return null;
@@ -192,7 +196,7 @@ export function isRoutableUrl(url) {
 
 export function contextForNewTab({ openerRecord, activeContextId, route }) {
   if (route?.contextId) return route.contextId;
-  if (openerRecord?.pinScope === "global") return activeContextId;
+  if (openerRecord?.pinned) return activeContextId;
   if (openerRecord?.contextId) return openerRecord.contextId;
   return activeContextId;
 }
@@ -211,7 +215,7 @@ export function assignRecordToGroup(record, { groupKey, route, url }) {
   if (groupKey === READ_LATER_ID) {
     record.originContextId = record.contextId;
     record.attention = "readLater";
-    record.pinScope = "none";
+    record.pinned = false;
     record.routeSuppressedHostname = null;
     return true;
   }
@@ -226,7 +230,7 @@ export function assignRecordToGroup(record, { groupKey, route, url }) {
 export function shouldArchiveTab({ tab, record, route, now, archiveAfterHours }) {
   if (!tab || !record || record.attention === "readLater") return false;
   if (tab.active || tab.audible || tab.pinned) return false;
-  if (record.pinScope === "global") return false;
+  if (record.pinned) return false;
   if (route) return false;
   if (!Number.isFinite(tab.lastAccessed)) return false;
   return now - tab.lastAccessed >= hours(archiveAfterHours);
@@ -274,11 +278,11 @@ export function updateYouTubeUrl(url, seconds) {
   }
 }
 
-export function hours(value) {
+function hours(value) {
   return Number(value) * 60 * 60 * 1000;
 }
 
-export function makeRecord({ tab, contextId, attention = "current", pinScope = "none", originContextId = null }) {
+export function makeRecord({ tab, contextId, attention = "current", pinned = false, originContextId = null }) {
   return {
     id: crypto.randomUUID(),
     url: tab.url || tab.pendingUrl || "",
@@ -286,7 +290,7 @@ export function makeRecord({ tab, contextId, attention = "current", pinScope = "
     contextId,
     originContextId: originContextId || contextId,
     attention,
-    pinScope,
+    pinned,
     routeSuppressedHostname: null,
     lastSeenAt: Date.now(),
   };

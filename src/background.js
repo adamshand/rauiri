@@ -1,6 +1,7 @@
 import {
   READ_LATER_ID,
   READ_LATER_TITLE,
+  TAB_GROUP_COLORS,
   assignRecordToGroup,
   attentionForNewTab,
   cleanHostnameInput,
@@ -9,6 +10,7 @@ import {
   createInitialState,
   findRecoverableRecords,
   groupKeyForRecord,
+  isValidRouteHostname,
   makeRecord,
   migrateState,
   normalizeHostname,
@@ -23,38 +25,31 @@ const STATE_KEY = "rauiriState";
 const SESSION_WINDOW_KEY = "rauiriManagedWindowId";
 const SWEEP_ALARM = "rauiri-hourly-sweep";
 const READ_LATER_COLOR = "grey";
-const GROUP_COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
 
 let state = createInitialState();
 let tabRecords = new Map();
 let groupIds = new Map();
-let mutedTabs = new Set();
+const mutedTabs = new Set();
 let operation = Promise.resolve();
 
 const ready = initialize();
 
 function run(task) {
-  operation = operation.then(async () => {
-    await ready;
-    return task();
-  }, async () => {
-    await ready;
-    return task();
-  });
-  return operation;
+  const result = operation.then(() => ready).then(() => task());
+  operation = result.catch(() => {});
+  return result;
 }
 
-function runEvent(task, allowRetry = true) {
-  void run(task).catch((error) => {
-    console.warn("Rauiri browser event failed:", error);
-    if (allowRetry && isTransientBrowserEdit(error)) {
-      setTimeout(() => runEvent(task, false), 500);
-    }
-  });
+function runEvent(task) {
+  void run(task).catch((error) => console.warn("Rauiri browser event failed:", error));
 }
 
-function isTransientBrowserEdit(error) {
-  return /cannot be edited right now|browser edit timed out/i.test(error?.message || String(error));
+function isTabEditLocked(error) {
+  return /cannot be edited right now/i.test(error?.message || String(error));
+}
+
+function isMissingGroup(error) {
+  return /no group with id|group not found/i.test(error?.message || String(error));
 }
 
 async function browserEditAttempt(task, timeoutMs = 1000) {
@@ -62,7 +57,7 @@ async function browserEditAttempt(task, timeoutMs = 1000) {
   try {
     return await Promise.race([
       Promise.resolve().then(task),
-      new Promise((resolve, reject) => {
+      new Promise((_, reject) => {
         timeout = setTimeout(() => reject(new Error("Browser edit timed out.")), timeoutMs);
       }),
     ]);
@@ -76,12 +71,10 @@ async function retryBrowserEdit(task, attempts = 4) {
     try {
       return await browserEditAttempt(task);
     } catch (error) {
-      if (/browser edit timed out/i.test(error?.message || "")
-        || !isTransientBrowserEdit(error) || attempt === attempts) throw error;
+      if (!isTabEditLocked(error) || attempt === attempts) throw error;
       await new Promise((resolve) => setTimeout(resolve, 125));
     }
   }
-  return null;
 }
 
 async function initialize() {
@@ -168,20 +161,20 @@ function contextKeyForGroup(group) {
 
 async function refreshGroupIds() {
   groupIds = new Map();
-  if (state.managedWindowId === null) return;
+  if (state.managedWindowId === null) return [];
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
   for (const group of groups) {
     const key = contextKeyForGroup(group);
     if (key && !groupIds.has(key)) groupIds.set(key, group.id);
   }
+  return groups;
 }
 
 async function reconcileManagedWindow() {
   if (state.managedWindowId === null || !await windowExists(state.managedWindowId)) return;
 
-  await refreshGroupIds();
+  const groups = await refreshGroupIds();
   const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
-  const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
   const groupKeys = new Map(groups.map((group) => [group.id, contextKeyForGroup(group)]));
   const unmatched = new Map(Object.values(state.records).map((record) => [record.id, record]));
   tabRecords = new Map();
@@ -205,7 +198,7 @@ async function reconcileManagedWindow() {
         tab,
         contextId,
         attention,
-        pinScope: tab.pinned ? "global" : "none",
+        pinned: tab.pinned,
       });
       state.records[record.id] = record;
     }
@@ -216,10 +209,12 @@ async function reconcileManagedWindow() {
     record.lastSeenAt = Date.now();
     if (groupContext) record.contextId = groupContext;
     if (attention === "readLater") record.attention = "readLater";
+    record.pinned = tab.pinned;
     tabRecords.set(tab.id, record.id);
   }
 
   await enforcePresentation({ activateTarget: false });
+  await orderGroups();
   await persist();
 }
 
@@ -245,7 +240,7 @@ async function ensureRecord(tab) {
     contextId,
     attention,
     originContextId: openerRecord?.originContextId || contextId,
-    pinScope: tab.pinned ? "global" : "none",
+    pinned: tab.pinned,
   });
   state.records[record.id] = record;
   tabRecords.set(tab.id, record.id);
@@ -290,24 +285,29 @@ async function ensureGroup(key, tabIds) {
   if (!ids.length) return groupIds.get(key) ?? null;
 
   let groupId = groupIds.get(key);
-  try {
-    if (Number.isInteger(groupId)) {
+  let created = false;
+  if (Number.isInteger(groupId)) {
+    try {
       await retryBrowserEdit(() => chrome.tabs.group({ groupId, tabIds: ids }));
-    } else {
-      groupId = await retryBrowserEdit(() => chrome.tabs.group({ tabIds: ids }));
-      groupIds.set(key, groupId);
+    } catch (error) {
+      if (!isMissingGroup(error)) throw error;
+      groupId = null;
     }
-  } catch (error) {
-    if (isTransientBrowserEdit(error)) throw error;
+  }
+  if (!Number.isInteger(groupId)) {
     groupId = await retryBrowserEdit(() => chrome.tabs.group({ tabIds: ids }));
     groupIds.set(key, groupId);
+    created = true;
   }
 
-  const context = contextById(key);
-  await retryBrowserEdit(() => chrome.tabGroups.update(groupId, {
-    title: key === READ_LATER_ID ? READ_LATER_TITLE : context?.title || "Context",
-    color: key === READ_LATER_ID ? READ_LATER_COLOR : context?.color || "grey",
-  }));
+  if (created) {
+    const context = contextById(key);
+    await retryBrowserEdit(() => chrome.tabGroups.update(groupId, {
+      title: key === READ_LATER_ID ? READ_LATER_TITLE : context?.title || "Context",
+      color: key === READ_LATER_ID ? READ_LATER_COLOR : context?.color || "grey",
+    }));
+    await orderGroups();
+  }
   return groupId;
 }
 
@@ -321,8 +321,16 @@ async function ungroupTab(tab) {
   await muteTab(tab.id, () => retryBrowserEdit(() => chrome.tabs.ungroup([tab.id])));
 }
 
+async function trySetGroupCollapsed(groupId, collapsed) {
+  try {
+    await retryBrowserEdit(() => chrome.tabGroups.update(groupId, { collapsed }));
+  } catch {
+    // The active tab or group may have changed while this operation was queued.
+  }
+}
+
 async function presentTab(tab, record) {
-  if (record.pinScope === "global") {
+  if (record.pinned) {
     await ungroupTab(tab);
     await setPinned(tab, true);
     return;
@@ -336,12 +344,14 @@ async function presentTab(tab, record) {
   }
 
   if (Number.isInteger(groupId) && key !== state.activeContextId && !tab.active) {
-    try {
-      await retryBrowserEdit(() => chrome.tabGroups.update(groupId, { collapsed: true }));
-    } catch {
-      // The active tab or group may have changed while this operation was queued.
-    }
+    await trySetGroupCollapsed(groupId, true);
   }
+}
+
+function mostRecentTab(tabs, predicate = () => true) {
+  return tabs.filter(predicate).reduce((latest, tab) => (
+    !latest || (tab.lastAccessed || 0) > (latest.lastAccessed || 0) ? tab : latest
+  ), null);
 }
 
 async function orderGroups() {
@@ -351,6 +361,15 @@ async function orderGroups() {
     if (!Number.isInteger(groupId)) continue;
     try { await retryBrowserEdit(() => chrome.tabGroups.move(groupId, { index: -1 })); } catch { /* stale group */ }
   }
+}
+
+async function createTabInContext(contextId) {
+  const tab = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
+  const record = makeRecord({ tab, contextId });
+  state.records[record.id] = record;
+  tabRecords.set(tab.id, record.id);
+  await presentTab(tab, record);
+  return tab;
 }
 
 async function enforcePresentation({ activateTarget = true, preferredTabId = null } = {}) {
@@ -367,40 +386,28 @@ async function enforcePresentation({ activateTarget = true, preferredTabId = nul
   if (activateTarget) {
     let target = preferredTabId ? tabs.find((tab) => tab.id === preferredTabId) : null;
     if (!target) {
-      target = tabs
-        .filter((tab) => {
-          const record = recordForTab(tab.id);
-          return record?.attention === "current"
-            && record.pinScope !== "global"
-            && record.contextId === state.activeContextId;
-        })
-        .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+      target = mostRecentTab(tabs, (tab) => {
+        const record = recordForTab(tab.id);
+        return record?.attention === "current"
+          && !record.pinned
+          && record.contextId === state.activeContextId;
+      });
     }
 
     if (!target) {
-      const created = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
-      const record = makeRecord({ tab: created, contextId: state.activeContextId });
-      state.records[record.id] = record;
-      tabRecords.set(created.id, record.id);
-      await presentTab(created, record);
-      target = created;
+      target = await createTabInContext(state.activeContextId);
     } else if (!target.active) {
       await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
     }
   }
 
-  await refreshGroupIds();
-  await orderGroups();
-  const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
+  const groups = await refreshGroupIds();
   for (const group of groups) {
     const key = contextKeyForGroup(group);
     if (!key) continue;
     const collapsed = key === READ_LATER_ID || key !== state.activeContextId;
-    try {
-      await retryBrowserEdit(() => chrome.tabGroups.update(group.id, { collapsed }));
-    } catch {
-      // The active tab or group may have changed while this operation was queued.
-    }
+    if (group.collapsed === collapsed) continue;
+    await trySetGroupCollapsed(group.id, collapsed);
   }
 }
 
@@ -416,7 +423,6 @@ async function adoptWindow(windowId) {
     settings: state.settings,
     activeContextId: initialContextId,
     managedWindowId: windowId,
-    adoptedAt: Date.now(),
   };
   tabRecords = new Map();
   groupIds = new Map();
@@ -425,7 +431,7 @@ async function adoptWindow(windowId) {
     const record = makeRecord({
       tab,
       contextId: initialContextId,
-      pinScope: tab.pinned ? "global" : "none",
+      pinned: tab.pinned,
     });
     state.records[record.id] = record;
     tabRecords.set(tab.id, record.id);
@@ -446,9 +452,9 @@ async function switchContext(contextId, preferredTabId = null) {
 
 async function activateMostRecentTabInGroup(group) {
   const tabs = await chrome.tabs.query({ windowId: group.windowId, groupId: group.id });
-  if (!tabs.length || tabs.some((tab) => tab.active)) return;
-  const target = tabs.sort((left, right) => (right.lastAccessed || 0) - (left.lastAccessed || 0))[0];
-  await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
+  if (tabs.some((tab) => tab.active)) return;
+  const target = mostRecentTab(tabs);
+  if (target) await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
 }
 
 async function enforceAccordion(updatedGroup) {
@@ -480,11 +486,7 @@ async function enforceAccordion(updatedGroup) {
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
   for (const group of groups) {
     if (group.id === expandedGroup.id || group.collapsed || !contextKeyForGroup(group)) continue;
-    try {
-      await retryBrowserEdit(() => chrome.tabGroups.update(group.id, { collapsed: true }));
-    } catch {
-      // The active tab or group may have changed while this operation was queued.
-    }
+    await trySetGroupCollapsed(group.id, true);
   }
 }
 
@@ -519,16 +521,7 @@ async function moveTabToContext(tabId, contextId) {
   // Filing the active tab into another context should not take the user there.
   // Activate a local fallback before moving the tab so the current context stays put.
   if (tab.active && contextId !== state.activeContextId) {
-    const fallback = await fallbackTabForContext(state.activeContextId, tabId);
-    if (fallback) {
-      await chrome.tabs.update(fallback.id, { active: true });
-    } else {
-      const created = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
-      const createdRecord = makeRecord({ tab: created, contextId: state.activeContextId });
-      state.records[createdRecord.id] = createdRecord;
-      tabRecords.set(created.id, createdRecord.id);
-      await presentTab(created, createdRecord);
-    }
+    await activateContextFallback(state.activeContextId, tabId);
     tab = await chrome.tabs.get(tabId);
   }
 
@@ -570,15 +563,19 @@ async function captureYouTubeTimestamp(tab) {
 
 async function fallbackTabForContext(contextId, excludedTabId) {
   const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
-  return tabs
-    .filter((tab) => {
-      if (tab.id === excludedTabId) return false;
-      const candidate = recordForTab(tab.id);
-      return candidate?.attention === "current"
-        && candidate.pinScope !== "global"
-        && candidate.contextId === contextId;
-    })
-    .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
+  return mostRecentTab(tabs, (tab) => {
+    if (tab.id === excludedTabId) return false;
+    const candidate = recordForTab(tab.id);
+    return candidate?.attention === "current"
+      && !candidate.pinned
+      && candidate.contextId === contextId;
+  });
+}
+
+async function activateContextFallback(contextId, excludedTabId) {
+  const fallback = await fallbackTabForContext(contextId, excludedTabId);
+  if (fallback) await retryBrowserEdit(() => chrome.tabs.update(fallback.id, { active: true }));
+  else await createTabInContext(contextId);
 }
 
 async function discardTab(tabId) {
@@ -595,22 +592,11 @@ async function moveTabToReadLater(tabId) {
   const wasActive = tab.active;
   record.originContextId = record.contextId;
   record.attention = "readLater";
-  record.pinScope = "none";
+  record.pinned = false;
   record.routeSuppressedHostname = null;
   record.url = await captureYouTubeTimestamp(tab);
 
-  if (wasActive) {
-    const fallback = await fallbackTabForContext(record.contextId, tabId);
-    if (!fallback) {
-      const created = await chrome.tabs.create({ windowId: state.managedWindowId, active: true });
-      const createdRecord = makeRecord({ tab: created, contextId: record.contextId });
-      state.records[createdRecord.id] = createdRecord;
-      tabRecords.set(created.id, createdRecord.id);
-      await presentTab(created, createdRecord);
-    } else {
-      await chrome.tabs.update(fallback.id, { active: true });
-    }
-  }
+  if (wasActive) await activateContextFallback(record.contextId, tabId);
 
   tab = await chrome.tabs.get(tabId);
   await presentTab(tab, record);
@@ -773,7 +759,7 @@ async function saveContexts(contexts) {
   const cleaned = contexts.map((context, index) => ({
     id: String(context.id),
     title: String(context.title || "Context").trim() || "Context",
-    color: GROUP_COLORS.has(context.color) ? context.color : "grey",
+    color: TAB_GROUP_COLORS.includes(context.color) ? context.color : "grey",
     order: index,
   }));
   if (!cleaned.length) throw new Error("Keep at least one context.");
@@ -797,17 +783,20 @@ async function saveContexts(contexts) {
   for (const context of cleaned) {
     const groupId = existingGroupIds.get(context.id);
     if (Number.isInteger(groupId)) {
-      await chrome.tabGroups.update(groupId, { title: context.title, color: context.color });
+      await retryBrowserEdit(() => chrome.tabGroups.update(groupId, {
+        title: context.title,
+        color: context.color,
+      }));
     }
   }
   groupIds = existingGroupIds;
+  await orderGroups();
   await persist();
 }
 
 async function addRoute(hostname, contextId, moveExisting = true) {
   const clean = cleanHostnameInput(hostname);
-  const host = clean.startsWith("*.") ? clean.slice(2) : clean;
-  if (!host || !/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(host)) {
+  if (!isValidRouteHostname(clean)) {
     throw new Error("Enter a hostname such as app.example.com or *.example.com.");
   }
   if (!contextById(contextId)) throw new Error("Choose a context.");
@@ -909,7 +898,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 
     if (typeof changeInfo.pinned === "boolean" && !mutedTabs.has(tabId)) {
-      record.pinScope = changeInfo.pinned ? "global" : "none";
+      record.pinned = changeInfo.pinned;
       record.attention = "current";
       if (!changeInfo.pinned) {
         record.contextId = state.activeContextId;

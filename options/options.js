@@ -1,16 +1,6 @@
-import { cleanHostnameInput, routeForUrl } from "../src/domain.js";
+import { TAB_GROUP_COLORS, cleanHostnameInput, routeForUrl } from "../src/domain.js";
 
-const GROUP_COLORS = [
-  ["grey", "Grey"],
-  ["blue", "Blue"],
-  ["red", "Red"],
-  ["yellow", "Yellow"],
-  ["green", "Green"],
-  ["pink", "Pink"],
-  ["purple", "Purple"],
-  ["cyan", "Cyan"],
-  ["orange", "Orange"],
-];
+const COLOR_OPTIONS = TAB_GROUP_COLORS.map((color) => [color, `${color[0].toUpperCase()}${color.slice(1)}`]);
 
 const ui = {
   contexts: document.querySelector("#contexts"),
@@ -99,7 +89,7 @@ function renderContexts() {
       context.title = title.value;
       renderContextSelect();
     });
-    color.replaceChildren(...GROUP_COLORS.map(([value, label]) => new Option(label, value, false, value === context.color)));
+    color.replaceChildren(...COLOR_OPTIONS.map(([value, label]) => new Option(label, value, false, value === context.color)));
     color.addEventListener("change", () => { context.color = color.value; });
 
     up.disabled = index === 0;
@@ -324,7 +314,7 @@ ui.backupFile.addEventListener("change", async () => {
     );
     if (!confirmed) return;
 
-    perform("Importing backup…", async () => {
+    await perform("Importing backup…", async () => {
       const result = await send("importBackup", { backup });
       selectedRecoveryIds.clear();
       await load();

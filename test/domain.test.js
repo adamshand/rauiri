@@ -9,6 +9,7 @@ import {
   createInitialState,
   findRecoverableRecords,
   groupKeyForRecord,
+  isValidRouteHostname,
   migrateState,
   normalizeHostname,
   routeForUrl,
@@ -35,7 +36,7 @@ function tab(overrides = {}) {
 function record(overrides = {}) {
   return {
     attention: "current",
-    pinScope: "none",
+    pinned: false,
     contextId: "personal",
     ...overrides,
   };
@@ -67,8 +68,9 @@ test("migration restores defaults, upgrades the old delay, and preserves custom 
   assert.equal(upgraded.activeContextId, "home");
   assert.equal(upgraded.settings.archiveAfterHours, 72);
   assert.equal(upgraded.settings.discardReadLaterAfterHours, 2);
-  assert.equal(upgraded.records.oldContextPin.pinScope, "none");
-  assert.equal(upgraded.records.globalPin.pinScope, "global");
+  assert.equal(upgraded.records.oldContextPin.pinned, false);
+  assert.equal(upgraded.records.globalPin.pinned, true);
+  assert.equal("pinScope" in upgraded.records.globalPin, false);
 
   const customized = migrateState({ version: 1, settings: { archiveAfterHours: 24 } });
   assert.equal(customized.settings.archiveAfterHours, 24);
@@ -108,6 +110,8 @@ test("wildcard routes match subdomains but not the apex or lookalike domains", (
   const routes = [{ id: "wild", hostname: "*.hnry.io", contextId: "work" }];
   assert.equal(cleanHostnameInput("HTTPS://*.HNRY.IO/path"), "*.hnry.io");
   assert.equal(cleanHostnameInput("https://%2a.hnry.io"), "*.hnry.io");
+  assert.equal(isValidRouteHostname("*.hnry.io"), true);
+  assert.equal(isValidRouteHostname("not a hostname"), false);
   assert.equal(routeForUrl(routes, "https://app.hnry.io")?.id, "wild");
   assert.equal(routeForUrl(routes, "https://deep.app.hnry.io")?.id, "wild");
   assert.equal(routeForUrl(routes, "https://www.hnry.io")?.id, "wild");
@@ -144,7 +148,7 @@ test("new tabs prefer strict routes, then opener, then active context", () => {
 
 test("children of global pins use the active context", () => {
   assert.equal(contextForNewTab({
-    openerRecord: { contextId: "personal", pinScope: "global" },
+    openerRecord: { contextId: "personal", pinned: true },
     activeContextId: "work",
   }), "work");
 });
@@ -169,7 +173,7 @@ test("native group moves update context, routing suppression, and Read Later sta
   assert.equal(assignRecordToGroup(moved, { groupKey: "read-later" }), true);
   assert.equal(groupKeyForRecord(moved), "read-later");
   assert.equal(moved.originContextId, "work");
-  assert.equal(moved.pinScope, "none");
+  assert.equal(moved.pinned, false);
 });
 
 test("ordinary tabs archive after the configured delay", () => {
@@ -195,7 +199,7 @@ test("active, audible, pinned, routed, and already-shelved tabs do not auto-arch
     { tab: tab({ active: true }), record: record(), route: null },
     { tab: tab({ audible: true }), record: record(), route: null },
     { tab: tab({ pinned: true }), record: record(), route: null },
-    { tab: tab(), record: record({ pinScope: "global" }), route: null },
+    { tab: tab(), record: record({ pinned: true }), route: null },
     { tab: tab(), record: record(), route: { contextId: "work" } },
     { tab: tab(), record: record({ attention: "readLater" }), route: null },
   ];

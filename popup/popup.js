@@ -116,10 +116,10 @@ async function act(label, task) {
   document.querySelectorAll("button, select").forEach((element) => { element.disabled = true; });
   try {
     await task();
-    document.querySelectorAll("button, select").forEach((element) => { element.disabled = false; });
     await load();
   } catch (error) {
     ui.message.textContent = error.message;
+  } finally {
     document.querySelectorAll("button, select").forEach((element) => { element.disabled = false; });
   }
 }
