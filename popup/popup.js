@@ -11,6 +11,8 @@ const colors = {
 };
 
 const ui = {
+  header: document.querySelector("header"),
+  headingTitle: document.querySelector("#heading-title"),
   status: document.querySelector("#status"),
   windowPanel: document.querySelector("#window-workspaces"),
   windowTrial: document.querySelector("#window-trial"),
@@ -61,14 +63,18 @@ async function load() {
 
 function render() {
   const windowMode = snapshot.mode === "windows";
+  ui.header.classList.toggle("workspace-heading", windowMode);
+  ui.headingTitle.textContent = "Rauiri";
   ui.windowPanel.hidden = !windowMode;
   ui.windowTrial.hidden = windowMode;
   if (windowMode) {
     ui.setup.hidden = true;
     ui.workspace.hidden = true;
-    ui.status.hidden = false;
     const current = snapshot.workspaces.find((item) => item.id === snapshot.currentWorkspaceId);
-    ui.status.textContent = current ? `Working in ${current.title}` : "This window is not assigned to a workspace";
+    ui.headingTitle.textContent = current?.title || "Unassigned window";
+    document.documentElement.style.setProperty("--context", colors[current?.color] || colors.grey);
+    ui.status.hidden = Boolean(current);
+    ui.status.textContent = "This window is not assigned to a workspace";
     ui.message.textContent = snapshot.browserWarning || "";
     renderWindowList();
     const placeholder = new Option("Move this tab…", "", true, true);
@@ -129,7 +135,10 @@ function render() {
 
 function renderWindowList() {
   const search = ui.windowSearch.value.trim().toLocaleLowerCase();
-  const workspaces = snapshot.workspaces.filter((item) => item.title.toLocaleLowerCase().includes(search));
+  const recent = snapshot.recentWorkspaceIds || [];
+  const rank = (id) => recent.includes(id) ? recent.indexOf(id) : recent.length;
+  const workspaces = snapshot.workspaces.filter((item) => item.title.toLocaleLowerCase().includes(search))
+    .sort((a, b) => rank(a.id) - rank(b.id));
   ui.windowList.replaceChildren(...workspaces.map((workspace) => {
     const row = document.createElement("div");
     row.className = "window-workspace-row";
@@ -137,7 +146,8 @@ function renderWindowList() {
     button.className = "window-workspace";
     button.type = "button";
     const title = document.createElement("strong");
-    title.textContent = workspace.title;
+    const slot = snapshot.workspaces.findIndex((item) => item.id === workspace.id) + 1;
+    title.textContent = `${slot <= 10 ? `${slot === 10 ? 0 : slot} · ` : ""}${workspace.title}`;
     const meta = document.createElement("span");
     const current = workspace.id === snapshot.currentWorkspaceId;
     meta.textContent = `${workspace.restoring ? "Finish restoring" : current ? "Current" : workspace.windowId !== null ? "Live · switch" : "Resume"} · ${workspace.tabCount} saved page${workspace.tabCount === 1 ? "" : "s"}`;
@@ -267,6 +277,14 @@ ui.enableWindows.addEventListener("click", () => {
   act("Creating workspace windows…", () => send("enableWindowWorkspaces", { windowId: currentWindow.id }));
 });
 ui.windowSearch.addEventListener("input", renderWindowList);
+ui.windowSearch.addEventListener("keydown", (event) => {
+  if (event.isComposing || !["Enter", "ArrowDown"].includes(event.key)) return;
+  const first = ui.windowList.querySelector(".window-workspace:not(:disabled)");
+  if (!first) return;
+  event.preventDefault();
+  if (event.key === "Enter") first.click();
+  else first.focus();
+});
 ui.windowDestination.addEventListener("change", () => {
   if (!ui.windowDestination.value || !activeTab) return;
   act("Filing tab in the background…", () => send("moveWindowTab", { tabId: activeTab.id, workspaceId: ui.windowDestination.value }), "Tab filed; you stayed in this workspace");
@@ -289,7 +307,9 @@ ui.settings.addEventListener("click", async () => {
   }
 });
 
-load().catch((error) => {
+load().then(() => {
+  if (snapshot.mode === "windows") ui.windowSearch.focus();
+}).catch((error) => {
   ui.status.textContent = "Unable to start";
   ui.message.textContent = error.message;
 });

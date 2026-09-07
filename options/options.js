@@ -8,6 +8,7 @@ const ui = {
   minimizeWorkspaces: document.querySelector("#minimize-workspaces"),
   saveWindowPreferences: document.querySelector("#save-window-preferences"),
   exportGroupBackup: document.querySelector("#export-group-backup"),
+  keyboardShortcuts: document.querySelector("#keyboard-shortcuts"),
   activateRoute: document.querySelector("#activate-route"),
   activateRouteLabel: document.querySelector("#activate-route-label"),
   contextTemplate: document.querySelector("#context-template"),
@@ -84,19 +85,20 @@ function render() {
     ? "Live workspaces remember their tabs automatically. Switch without reloading, or resume a closed workspace from its saved URLs."
     : "Save selected tabs from the popup for a client or task. Opening adds missing pages without closing tabs.";
   ui.routeForm.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "File matching URLs in a workspace without following. Optionally follow an active tab to its destination. Native pins and manual assignments are left alone."
+    ? "Address-bar navigation follows you to the matching workspace. Other navigation files quietly unless you enable following. Cleanup moves always stay in the background; native pins are never automatically routed."
     : "Use exact hostnames or *.example.com for subdomains. Routed sites stay out of automatic shelving.";
   ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspace names & order" : "Contexts";
   ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Rename workspaces here. Create and switch workspace windows from the popup."
+    ? "This order fixes workspace shortcuts 1–9 and 0 (tenth). Recent use only changes the popup display order. Create new workspaces in the popup."
     : "Names, colours, and order map directly to Helium’s native groups.";
   renderContexts();
   renderContextSelect();
   renderRoutes();
   renderWorkspaces();
   renderRecovery();
-  ui.archiveHours.value = snapshot.settings.archiveAfterHours;
-  ui.discardHours.value = snapshot.settings.discardReadLaterAfterHours;
+  // Window mode has no lifecycle settings; hidden number inputs still reject undefined.
+  ui.archiveHours.value = windowMode ? "" : snapshot.settings.archiveAfterHours;
+  ui.discardHours.value = windowMode ? "" : snapshot.settings.discardReadLaterAfterHours;
   ui.status.textContent = snapshot.browserWarning || (snapshot.hasManagedWindow ? "Managed window connected" : "No managed window");
 }
 
@@ -104,6 +106,12 @@ function renderContexts() {
   ui.contexts.replaceChildren(...contexts.map((context, index) => {
     const row = ui.contextTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.id = context.id;
+    if (snapshot.mode === "windows") {
+      row.classList.add("workspace-context");
+      const slot = makeElement("span", "workspace-slot", index < 10 ? String((index + 1) % 10) : "—");
+      slot.setAttribute("aria-label", index < 10 ? `Shortcut slot ${(index + 1) % 10}` : "No numbered shortcut");
+      row.prepend(slot);
+    }
     const title = row.querySelector(".context-title");
     const color = row.querySelector(".context-color");
     const up = row.querySelector(".move-up");
@@ -156,8 +164,22 @@ function renderRoutes() {
   ui.routes.replaceChildren(...snapshot.routes.map((route) => {
     const row = makeElement("div", "route-row");
     const host = makeElement("code", "", route.hostname);
-    const contextTitle = snapshot.contexts.find((candidate) => candidate.id === route.contextId)?.title || "Unknown context";
-    const context = makeElement("span", "", `${contextTitle}${snapshot.mode === "windows" ? route.activate ? " · follow" : " · background" : ""}`);
+    const context = makeElement("div", "route-destination");
+    const destination = document.createElement("select");
+    destination.setAttribute("aria-label", `Destination for ${route.hostname}`);
+    destination.replaceChildren(...snapshot.contexts.map((item) => new Option(item.title, item.id)));
+    destination.value = route.contextId;
+    destination.addEventListener("change", () => perform("Updating route…", async () => {
+      try {
+        await send("updateRouteDestination", { routeId: route.id, contextId: destination.value });
+        await refreshSnapshot();
+      } catch (error) {
+        destination.value = route.contextId;
+        throw error;
+      }
+    }, "Route updated; existing tabs were not moved"));
+    context.append(destination);
+    if (snapshot.mode === "windows") context.append(makeElement("span", "", route.activate ? "Follow navigation" : "Follow address bar only"));
     const remove = document.createElement("button");
     remove.className = "remove";
     remove.type = "button";
@@ -175,12 +197,22 @@ function renderRoutes() {
 
 function renderWorkspaces() {
   if (snapshot.mode === "windows") {
-    ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace) => {
+    ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace, index) => {
       const row = makeElement("div", "workspace-row");
-      const label = makeElement("span", "", `${workspace.title} · ${workspace.windowId === null ? "Closed" : "Live"} · ${workspace.tabCount} saved pages`);
+      const label = makeElement("span", "", `${index < 10 ? `${(index + 1) % 10} · ` : ""}${workspace.title} · ${workspace.windowId === null ? "Closed" : "Live"} · ${workspace.tabCount} saved pages`);
       const open = makeElement("button", "quiet", workspace.restoring ? "Finish restoring" : workspace.windowId === null ? "Resume" : "Switch");
       open.addEventListener("click", () => perform("Opening workspace…", () => send("focusWindowWorkspace", { workspaceId: workspace.id })));
-      row.append(label, open);
+      const keepLabel = makeElement("label", "checkbox");
+      const keep = document.createElement("input");
+      keep.type = "checkbox";
+      keep.checked = workspace.keepAvailable;
+      keep.setAttribute("aria-label", `Keep ${workspace.title} available`);
+      keep.addEventListener("change", () => perform("Saving window preference…", async () => {
+        await send("setWorkspaceAvailability", { workspaceId: workspace.id, keepAvailable: keep.checked });
+        await refreshSnapshot();
+      }));
+      keepLabel.append(keep, makeElement("span", "", "Keep available"));
+      row.append(label, keepLabel, open);
       return row;
     }));
     return;
@@ -356,6 +388,7 @@ ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", 
   await refreshSnapshot();
 }));
 
+ui.keyboardShortcuts.addEventListener("click", () => perform("Opening shortcut settings…", () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" })));
 ui.saveWindowPreferences.addEventListener("click", () => perform("Saving preferences…", () => send("setWorkspacePreferences", { minimizeOthers: ui.minimizeWorkspaces.checked })));
 ui.exportGroupBackup.addEventListener("click", () => perform("Exporting original backup…", async () => {
   downloadJson(await send("exportLegacyBackup"), "rauiri-original-groups.json");

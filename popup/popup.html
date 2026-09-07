@@ -11,7 +11,9 @@
     <main>
       <header>
         <img class="brand-mark" src="../assets/icon-48.png" width="30" height="30" alt="">
-        <h1>Rauiri</h1>
+        <div class="heading-copy">
+          <h1 id="heading-title">Rauiri</h1>
+        </div>
         <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Settings">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>
         </button>
@@ -25,9 +27,9 @@
       </section>
 
       <section id="window-workspaces" hidden>
+        <label class="field window-move"><span class="visually-hidden">Move this tab</span><select id="window-destination"></select></label>
         <label class="field"><span class="visually-hidden">Find a workspace</span><input id="window-search" type="search" autocomplete="off" placeholder="Find a workspace…"></label>
         <div id="window-list" class="window-list"></div>
-        <label class="field window-move"><span>File this tab without following</span><select id="window-destination"></select></label>
         <details class="workspace-controls">
           <summary>New workspace</summary>
           <form id="new-window-workspace">

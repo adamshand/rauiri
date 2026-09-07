@@ -20,11 +20,24 @@ Each workspace has its own live browser window and its own native pins. The sear
 - **New workspace** creates a separate window for a client, project, or personal area.
 - Tab URLs, order, titles, and pinning are remembered automatically. No repeated Save action.
 - **File this tab without following** moves it in the background, keeping the source window alive and activating a local fallback when necessary.
-- Settings can minimise the other assigned workspace windows when switching. Unrelated windows are never minimised.
-- Routes default to background filing. Check **Follow active tabs to the destination workspace** for rules that should take you there. Background tabs never steal focus, even for follow rules.
-- Exact hostname rules win over wildcards; the most specific wildcard wins. Manually assigned URLs and native pinned tabs are not automatically rerouted. Navigating a manually assigned tab to a different URL allows routing again.
+- Settings can minimise the other assigned workspace windows when switching. Mark Personal (or any workspace) **Keep available** to exempt it. This does not open a closed workspace or make it always-on-top. Unrelated windows are never minimised.
+- Address-bar navigation routes **and follows** when the tab is still foreground. Other navigation files quietly unless the rule enables following. Explicit filing and **Move existing matches** always stay in the background, even for follow rules. Background tabs and unfocused windows never initiate a focus switch.
+- Routing waits for top-level navigation metadata from Chromium’s `webNavigation` API (a new extension permission), rather than guessing from tab creation/history. Address-bar qualifiers and typed transitions identify deliberate visits; Helium’s reporting still needs real-world verification.
+- Exact hostname rules win over wildcards; the most specific wildcard wins. Native pins are never automatically routed. Manual assignment lasts until the URL changes or you deliberately navigate from the address bar.
 
 This is a live-window prototype, not automatic cold storage. **Switching never closes tabs.** If you close a whole workspace window through the browser, Rauiri retains its last captured web URLs and pinning for explicit resumption. This is not a guarantee of unsaved forms, application state, history, or a complete browser session. Browser memory management can still unload tabs.
+
+### Keyboard switching
+
+Default shortcuts (`Alt` is Option on macOS):
+
+- **Option/Alt+Shift+Space**: open the popup with search focused. Type, then Enter to switch to the first available result; Arrow Down enters the results.
+- **Option/Alt+Shift+P**: toggle back to the previous workspace, including switches made using native window controls.
+- **Option/Alt+1 / +2**: switch to the first/second workspace.
+
+Commands for slots **3–10** are also available: assign Option/Alt+3 through +9 and +0 in **Settings → Configure keyboard shortcuts** (`chrome://extensions/shortcuts`). Chromium permits only four default assignments and does not support backtick as an extension command key. OS/browser conflicts may require rebinding defaults there too.
+
+Slot numbers follow **Workspace names & order** in Settings, independent of the popup’s recent-first sorting. Previous/recent history survives service-worker restarts within the browser session. Shortcuts other than opening the popup are inactive in legacy group mode.
 
 ### Restart and recovery
 

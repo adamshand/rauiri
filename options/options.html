@@ -25,6 +25,9 @@
         <div class="section-body">
           <label class="checkbox"><input id="minimize-workspaces" type="checkbox"><span>Minimise other workspace windows when switching</span></label>
           <div class="actions"><button id="save-window-preferences" class="primary" type="button">Save preferences</button><button id="export-group-backup" class="quiet" type="button">Export original group backup</button></div>
+          <p class="empty">Mark a workspace <strong>Keep available</strong> below to exempt its window from minimising. This does not open a closed workspace or make it always-on-top.</p>
+          <p class="empty">Shortcuts: Option/Alt+Shift+Space searches; Option/Alt+Shift+P returns to the previous workspace. Option/Alt+1 and +2 select the first two. Assign 3–9 and 0 below. Chromium supports neither backtick commands nor more than four default assignments.</p>
+          <button id="keyboard-shortcuts" class="quiet" type="button">Configure keyboard shortcuts</button>
           <p class="empty">Ordinary switching never closes tabs. A closed workspace can reopen its last saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached explicitly from the popup.</p>
         </div>
       </section>
@@ -62,9 +65,10 @@
               <input id="move-existing" type="checkbox" checked>
               <span>Move existing matches</span>
             </label>
-            <label id="activate-route-label" class="checkbox" hidden><input id="activate-route" type="checkbox"><span>Follow active tabs to the destination workspace</span></label>
+            <label id="activate-route-label" class="checkbox" hidden><input id="activate-route" type="checkbox"><span>Also follow other foreground navigation (address-bar navigation always follows)</span></label>
             <button class="primary" type="submit">Add route</button>
           </form>
+          <p class="empty">Change a saved route’s destination below. Changes save immediately; existing tabs stay where they are.</p>
           <div id="routes" class="route-list"></div>
         </div>
       </section>

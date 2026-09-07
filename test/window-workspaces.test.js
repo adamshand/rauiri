@@ -24,6 +24,8 @@ function harness() {
   const api = {
     storage: { local: storage(local), session: storage(session) },
     runtime: { onStartup: event() },
+    commands: { onCommand: event() },
+    webNavigation: { onCommitted: event(), onHistoryStateUpdated: event(), onReferenceFragmentUpdated: event() },
     tabGroups: {
       TAB_GROUP_ID_NONE: -1,
       query: async () => [{ id: 11, title: "Personal" }, { id: 12, title: "Work" }],
@@ -48,7 +50,8 @@ function harness() {
         Object.assign(windows.get(id), props);
         return api.windows.get(id);
       },
-      onRemoved: event(),
+      getLastFocused: async () => ({ ...[...windows.values()].find((window) => window.focused) }),
+      onFocusChanged: event(), onRemoved: event(),
     },
     tabs: {
       get: async (id) => { if (!tabs.has(id)) throw new Error("No tab"); return { ...tabs.get(id) }; },
@@ -133,14 +136,14 @@ test("background filing preserves source focus and pinned tabs retain pinning wh
   assert.equal(app.windows.has(1), true, "last-tab filing must keep the source window alive");
 });
 
-test("routing stays in the background by default and can follow an active tab explicitly", async () => {
+test("cleanup stays in the background even for follow rules", async () => {
   const app = await enabled();
   await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work", moveExisting: true });
   assert.equal(app.tabs.get(1).windowId, 10);
   assert.equal(app.windows.get(1).focused, true);
   await app.api.tabs.create({ windowId: 1, url: "https://follow.example", active: true });
   await app.controller.handle({ type: "addRoute", hostname: "follow.example", contextId: "work", activate: true, moveExisting: true });
-  assert.equal(app.windows.get(10).focused, true);
+  assert.equal(app.windows.get(1).focused, true);
 });
 
 test("a follow rule does not steal focus for a background tab", async () => {
@@ -249,6 +252,124 @@ test("interrupted restoration retains the full inventory and retries only missin
   assert.equal([...app.tabs.values()].filter((tab) => tab.url === "https://pin.example").length, 1);
   assert.equal(app.calls.filter(([method]) => method === "window.create").length, 1);
   assert.equal(app.local.rauiriWindowWorkspaces.workspaces.find((w) => w.id === "personal").restorePending, undefined);
+});
+
+test("changing a saved route destination preserves its identity and behavior without moving tabs", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "personal", activate: true });
+  const route = (await app.controller.handle({ type: "snapshot" })).routes[0];
+  const original = structuredClone(route);
+  app.calls.length = 0;
+  await app.controller.handle({ type: "updateRouteDestination", routeId: route.id, contextId: "work" });
+  assert.deepEqual(app.local.rauiriWindowWorkspaces.routes[0], { ...original, contextId: "work" });
+  assert.equal(app.calls.length, 0);
+  await assert.rejects(app.controller.handle({ type: "updateRouteDestination", routeId: route.id, contextId: "missing" }), /Choose a workspace/);
+  await assert.rejects(app.controller.handle({ type: "updateRouteDestination", routeId: "missing", contextId: "personal" }), /no longer exists/);
+  assert.equal(app.local.rauiriWindowWorkspaces.routes[0].contextId, "work");
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 10);
+});
+
+test("keep-available exempts only the chosen workspace and survives configuration export", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setWorkspaceAvailability", workspaceId: "personal", keepAvailable: true });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  assert.equal(app.windows.get(1).state, "normal");
+  const backup = await app.controller.handle({ type: "exportBackup", configurationOnly: true });
+  assert.equal(validateWindowState(backup.state).workspaces[0].keepAvailable, true);
+  await app.controller.handle({ type: "setWorkspaceAvailability", workspaceId: "personal", keepAvailable: false });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  assert.equal(app.windows.get(1).state, "minimized");
+  backup.state.workspaces[0].keepAvailable = "yes";
+  assert.throws(() => validateWindowState(backup.state), /Invalid workspace/);
+});
+
+test("previous-workspace toggles and numbered shortcuts use stable order, not recency", async () => {
+  const app = await enabled();
+  app.api.commands.onCommand.emit("workspace-2");
+  await app.barrier();
+  assert.equal(app.windows.get(10).focused, true);
+  app.api.commands.onCommand.emit("previous-workspace");
+  await app.barrier();
+  assert.equal(app.windows.get(1).focused, true);
+  app.api.commands.onCommand.emit("previous-workspace");
+  await app.barrier();
+  assert.equal(app.windows.get(10).focused, true);
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  await restarted.start();
+  const snapshot = await restarted.handle({ type: "snapshot" });
+  assert.deepEqual(snapshot.recentWorkspaceIds.slice(0, 2), ["work", "personal"]);
+  assert.equal(snapshot.workspaces[0].id, "personal");
+});
+
+test("native window switching updates recent workspaces but unrelated windows do not", async () => {
+  const app = await enabled();
+  await app.api.windows.update(10, { focused: true });
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  app.api.windows.onFocusChanged.emit(-1);
+  await app.barrier();
+  assert.deepEqual((await app.controller.handle({ type: "snapshot" })).recentWorkspaceIds.slice(0, 2), ["work", "personal"]);
+});
+
+test("address-bar navigation waits for intent then follows; duplicate completion does not route twice", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work" });
+  app.api.tabs.onUpdated.emit(1, { url: "https://personal.example" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 1);
+  const details = { tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "generated", transitionQualifiers: ["from_address_bar", "server_redirect"] };
+  app.api.webNavigation.onCommitted.emit(details);
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 10);
+  assert.equal(app.tabs.get(1).active, true);
+  assert.equal(app.windows.get(10).focused, true);
+  app.api.webNavigation.onCommitted.emit(details);
+  app.api.tabs.onUpdated.emit(1, { status: "complete" });
+  await app.barrier();
+  assert.equal(app.calls.filter(([method]) => method === "tab.move").length, 1);
+});
+
+test("background and unfocused navigation never steal focus, even with address-bar metadata", async () => {
+  for (const background of [true, false]) {
+    const app = await enabled();
+    await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work", activate: true });
+    if (background) await app.api.tabs.update(3, { active: true });
+    else app.windows.get(1).focused = false;
+    app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "typed" });
+    await app.barrier();
+    assert.equal(app.tabs.get(1).windowId, 10);
+    assert.equal(app.windows.get(10).focused, false);
+  }
+});
+
+test("navigation routing ignores subframes and stale events, and follows foreground links only by rule", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work", activate: true });
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 3, url: "https://personal.example", transitionType: "typed" });
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://old.example", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 1);
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "link" });
+  await app.barrier();
+  assert.equal(app.windows.get(10).focused, true);
+});
+
+test("explicit address-bar intent overrides manual filing but never native pins", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "moveWindowTab", tabId: 1, workspaceId: "work" });
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "personal" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  await app.api.tabs.update(1, { active: true });
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 1);
+  await app.controller.handle({ type: "addRoute", hostname: "pin.example", contextId: "work" });
+  app.api.webNavigation.onCommitted.emit({ tabId: 3, frameId: 0, url: "https://pin.example", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(3).windowId, 1);
 });
 
 test("browser restart reconnects exact inventories but leaves ambiguous windows unassigned", async () => {

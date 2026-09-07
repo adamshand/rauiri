@@ -1123,6 +1123,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true };
       case "addRoute":
         return addRoute(message.hostname, message.contextId, message.moveExisting);
+      case "updateRouteDestination": {
+        const route = state.routes.find((item) => item.id === message.routeId);
+        if (!route) throw new Error("This route no longer exists. Refresh Settings.");
+        if (!contextById(message.contextId)) throw new Error("Choose a context.");
+        route.contextId = message.contextId;
+        await persist();
+        return { ok: true };
+      }
       case "removeRoute":
         await removeRoute(message.routeId);
         return { ok: true };

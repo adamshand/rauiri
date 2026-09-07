@@ -93,6 +93,9 @@ h2 {
   animation: enter 180ms ease-out both;
 }
 
+.context-row.workspace-context { grid-template-columns: 24px 25px minmax(170px, 1fr) 130px; }
+.workspace-slot { color: var(--muted); font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+
 .order-buttons { display: grid; gap: 1px; }
 .order-buttons button {
   min-height: 18px;
@@ -179,14 +182,16 @@ label > span {
 .backup-body .checkbox { margin: 16px 0 10px; }
 .route-row {
   display: grid;
-  grid-template-columns: 1fr 145px 30px;
+  grid-template-columns: minmax(0, 1fr) minmax(145px, 1fr) 30px;
   gap: 10px;
   align-items: center;
   min-height: 49px;
   border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
-.route-row code { color: var(--ink); font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.route-destination { display: grid; gap: 4px; padding: 8px 0; min-width: 0; }
+.route-destination select { width: 100%; min-width: 0; }
+.route-row code { overflow-wrap: anywhere; color: var(--ink); font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .route-row span { color: var(--muted); font-size: 12px; }
 .empty { padding: 18px 0; color: var(--muted); font-size: 12px; }
 

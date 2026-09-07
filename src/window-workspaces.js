@@ -2,6 +2,7 @@ import { cleanHostnameInput, isRoutableUrl, isValidRouteHostname, routeForUrl, T
 
 const KEY = "rauiriWindowWorkspaces";
 const SESSION_KEY = "rauiriWorkspaceWindows";
+const RECENT_KEY = "rauiriRecentWorkspaces";
 const FORMAT = "rauiri-window-workspaces";
 
 export function validateWindowState(value) {
@@ -11,6 +12,7 @@ export function validateWindowState(value) {
   for (const workspace of value.workspaces) {
     if (!workspace || typeof workspace.id !== "string" || !workspace.id || ids.has(workspace.id)
       || typeof workspace.title !== "string" || !workspace.title.trim() || !TAB_GROUP_COLORS.includes(workspace.color)
+      || (workspace.keepAvailable !== undefined && typeof workspace.keepAvailable !== "boolean")
       || !Array.isArray(workspace.tabs)) throw new Error("Invalid workspace in backup.");
     ids.add(workspace.id);
     for (const tab of workspace.tabs) {
@@ -41,6 +43,7 @@ export function createWindowWorkspaces(api) {
   const moves = new Map(); // tab id -> expected destination window
   const seeds = new Map(); // blank tabs created by us for a restore
   let timer;
+  let recent = []; // Most recently focused first; separate from stable shortcut order.
 
   const ready = (async () => {
     const stored = await api.storage.local.get(KEY);
@@ -64,7 +67,7 @@ export function createWindowWorkspaces(api) {
   function event(task) { void enqueue(async () => { if (enabled()) await task(); }).catch(() => {}); }
   async function persist() {
     await api.storage.local.set({ [KEY]: data });
-    await api.storage.session.set({ [SESSION_KEY]: Object.fromEntries(bindings) });
+    await api.storage.session.set({ [SESSION_KEY]: Object.fromEntries(bindings), [RECENT_KEY]: recent });
   }
   async function edit(task) {
     if (blockedEdit) throw new Error("A browser edit is still pending. You can still open Settings and export a backup.");
@@ -121,7 +124,14 @@ export function createWindowWorkspaces(api) {
     clearTimeout(timer);
     timer = setTimeout(() => event(captureAll), 100);
   }
+  async function rememberFocus(id) {
+    if (recent[0] === id) return;
+    recent = [id, ...recent.filter((item) => item !== id)];
+    await api.storage.session.set({ [RECENT_KEY]: recent });
+  }
   async function start() {
+    const storedRecent = (await api.storage.session.get(RECENT_KEY))[RECENT_KEY];
+    recent = Array.isArray(storedRecent) ? [...new Set(storedRecent)].filter((id) => data.workspaces.some((w) => w.id === id)) : [];
     const session = await api.storage.session.get(SESSION_KEY);
     const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
     const available = new Map(windows.map((window) => [window.id, window]));
@@ -145,6 +155,9 @@ export function createWindowWorkspaces(api) {
         if (workspace.tabs.some((saved) => saved.url === tab.url && saved.routeOverride)) overrides.set(tab.id, tab.url);
       }
     }
+    const focused = windows.find((window) => window.focused);
+    const current = workspaceForWindow(focused?.id);
+    if (current) await rememberFocus(current.id);
     await captureAll();
   }
   async function ensureLive(workspace) {
@@ -201,9 +214,10 @@ export function createWindowWorkspaces(api) {
     const windowId = await ensureLive(workspace);
     const window = await normalWindow(windowId);
     await edit(() => api.windows.update(windowId, { ...(window.state === "minimized" ? { state: "normal" } : {}), focused: true }));
+    await rememberFocus(id);
     if (data.minimizeOthers) {
       for (const [otherId, otherWindowId] of bindings) {
-        if (otherId === id) continue;
+        if (otherId === id || find(otherId).keepAvailable) continue;
         try { await edit(() => api.windows.update(otherWindowId, { state: "minimized" })); }
         catch (error) { warning = error.message; }
       }
@@ -239,15 +253,21 @@ export function createWindowWorkspaces(api) {
       await focus(destinationId);
     }
   }
-  async function routeTab(tabId) {
+  async function routeTab(tabId, { addressBar = false, cleanup = false, url: committedUrl } = {}) {
     let tab;
     try { tab = await api.tabs.get(tabId); } catch { return; }
     if (!workspaceForWindow(tab.windowId) || tab.incognito || tab.pinned) return;
     const url = tab.pendingUrl || tab.url;
-    if (overrides.get(tabId) === url) return;
+    // Ignore a queued event if this tab has since navigated elsewhere.
+    if (committedUrl && committedUrl !== url) return;
+    if (!addressBar && overrides.get(tabId) === url) return;
     overrides.delete(tabId);
     const route = routeForUrl(data.routes, url);
-    if (route) await moveTab(tabId, route.contextId, route.activate && tab.active, false);
+    if (route) {
+      const source = await normalWindow(tab.windowId);
+      const follow = !cleanup && (addressBar || route.activate) && tab.active && source.focused;
+      await moveTab(tabId, route.contextId, follow, false);
+    }
   }
   async function enable(legacy, windowId, recordIds = {}) {
     if (enabled()) throw new Error("Window workspaces are already enabled.");
@@ -302,8 +322,8 @@ export function createWindowWorkspaces(api) {
   function overview(windowId) {
     return {
       mode: "windows", managed: Boolean(workspaceForWindow(windowId)), currentWorkspaceId: workspaceForWindow(windowId)?.id || null,
-      browserWarning: warning, minimizeOthers: data.minimizeOthers,
-      workspaces: data.workspaces.map((workspace) => ({ id: workspace.id, title: workspace.title, color: workspace.color, windowId: bindings.get(workspace.id) ?? null, restoring: workspace.restorePending === true, tabCount: workspace.tabs.length })),
+      browserWarning: warning, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent],
+      workspaces: data.workspaces.map((workspace) => ({ id: workspace.id, title: workspace.title, color: workspace.color, windowId: bindings.get(workspace.id) ?? null, restoring: workspace.restorePending === true, keepAvailable: workspace.keepAvailable === true, tabCount: workspace.tabs.length })),
       contexts: data.workspaces.map(({ id, title, color }, order) => ({ id, title, color, order })),
       routes: data.routes, settings: {}, hasManagedWindow: bindings.size > 0, managedWindowId: null,
     };
@@ -314,7 +334,7 @@ export function createWindowWorkspaces(api) {
     if (message.type === "exportBackup") {
       const legacy = await api.storage.local.get("rauiriState");
       return { format: FORMAT, formatVersion: 1, exportedAt: new Date().toISOString(),
-        state: message.configurationOnly ? { ...data, workspaces: data.workspaces.map(({ id, title, color }) => ({ id, title, color, tabs: [] })) } : data,
+        state: message.configurationOnly ? { ...data, workspaces: data.workspaces.map(({ id, title, color, keepAvailable }) => ({ id, title, color, keepAvailable: keepAvailable === true, tabs: [] })) } : data,
         ...(message.configurationOnly ? {} : { legacyState: legacy.rauiriState }) };
     }
     if (message.type === "exportLegacyBackup") {
@@ -349,6 +369,10 @@ export function createWindowWorkspaces(api) {
           await captureAll();
           break;
         }
+        case "setWorkspaceAvailability":
+          find(message.workspaceId).keepAvailable = message.keepAvailable === true;
+          await persist();
+          break;
         case "setWorkspacePreferences": data.minimizeOthers = message.minimizeOthers === true; await persist(); break;
         case "saveContexts": {
           if (!Array.isArray(message.contexts) || message.contexts.length !== data.workspaces.length) throw new Error("Create workspaces in the popup. Removing workspaces is not supported in this live prototype.");
@@ -371,10 +395,18 @@ export function createWindowWorkspaces(api) {
           if (message.moveExisting) {
             for (const id of [...bindings.values()]) {
               for (const tab of await api.tabs.query({ windowId: id })) {
-                if (routeForUrl(data.routes, tab.url)?.id === data.routes.at(-1).id) await routeTab(tab.id);
+                if (routeForUrl(data.routes, tab.url)?.id === data.routes.at(-1).id) await routeTab(tab.id, { cleanup: true });
               }
             }
           }
+          break;
+        }
+        case "updateRouteDestination": {
+          const route = data.routes.find((item) => item.id === message.routeId);
+          if (!route) throw new Error("This route no longer exists. Refresh Settings.");
+          find(message.contextId);
+          route.contextId = message.contextId;
+          await persist();
           break;
         }
         case "removeRoute": data.routes = data.routes.filter((route) => route.id !== message.routeId); await persist(); break;
@@ -400,11 +432,23 @@ export function createWindowWorkspaces(api) {
     });
   }
 
-  api.tabs.onCreated.addListener((tab) => event(async () => { await routeTab(tab.id); scheduleCapture(); }));
-  api.tabs.onUpdated.addListener((tabId, changes) => {
-    if (changes.url || changes.status === "complete") event(() => routeTab(tabId));
-    scheduleCapture();
-  });
+  // Route only once navigation intent is known. tabs.onUpdated can arrive before
+  // onCommitted; moving there would lose address-bar intent and source focus.
+  const navigation = (details) => {
+    if (details.frameId !== 0 || (details.documentLifecycle && details.documentLifecycle !== "active")) return;
+    event(async () => {
+      await routeTab(details.tabId, {
+        url: details.url,
+        addressBar: details.transitionQualifiers?.includes("from_address_bar") || details.transitionType === "typed",
+      });
+      scheduleCapture();
+    });
+  };
+  api.webNavigation.onCommitted.addListener(navigation);
+  api.webNavigation.onHistoryStateUpdated.addListener(navigation);
+  api.webNavigation.onReferenceFragmentUpdated.addListener(navigation);
+  api.tabs.onCreated.addListener(scheduleCapture);
+  api.tabs.onUpdated.addListener(scheduleCapture);
   api.tabs.onMoved.addListener(scheduleCapture);
   api.tabs.onDetached.addListener(scheduleCapture);
   api.tabs.onAttached.addListener((tabId, info) => {
@@ -426,6 +470,24 @@ export function createWindowWorkspaces(api) {
   api.windows.onRemoved.addListener((windowId) => event(async () => {
     const workspace = workspaceForWindow(windowId);
     if (workspace) { bindings.delete(workspace.id); await persist(); }
+  }));
+  api.windows.onFocusChanged.addListener((windowId) => event(async () => {
+    const workspace = workspaceForWindow(windowId);
+    if (!workspace) return;
+    // A queued focus event may describe an intermediate window we have already left.
+    const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
+    if (current.id === windowId) await rememberFocus(workspace.id);
+  }));
+  api.commands.onCommand.addListener((command) => event(async () => {
+    if (command === "previous-workspace") {
+      const currentWindow = await api.windows.getLastFocused({ windowTypes: ["normal"] });
+      const current = workspaceForWindow(currentWindow.id);
+      const target = recent.find((id) => id !== current?.id);
+      if (target) await focus(target);
+    } else if (/^workspace-(10|[1-9])$/.test(command)) {
+      const workspace = data.workspaces[Number(command.slice(10)) - 1];
+      if (workspace) await focus(workspace.id);
+    }
   }));
   api.runtime.onStartup.addListener(() => event(start));
 

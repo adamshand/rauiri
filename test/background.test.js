@@ -23,11 +23,13 @@ async function harness({ stored = domain.createInitialState(), discover = async 
       },
       session: { get: async () => ({}), set: async () => {}, remove: async () => {} },
     },
+    commands: { onCommand: event() },
+    webNavigation: { onCommitted: event(), onHistoryStateUpdated: event(), onReferenceFragmentUpdated: event() },
     alarms: { get: async () => ({}), onAlarm: event() },
     windows: {
       getAll: discover,
       get: async (id) => ({ id, type: "normal", incognito: false, tabs: [] }),
-      onRemoved: event(),
+      onFocusChanged: event(), onRemoved: event(),
     },
     tabs: {
       query: async () => [],
@@ -68,6 +70,21 @@ test("commands from non-UI senders are rejected", async () => {
   ));
   assert.equal(response.ok, false);
   assert.match(response.error, /popup or Settings/);
+});
+
+test("legacy route destination edits validate and preserve the saved rule", async () => {
+  const stored = domain.createInitialState();
+  stored.routes = [{ id: "route", hostname: "example.com", contextId: "personal" }];
+  const app = await harness({ stored });
+  const send = (routeId, contextId) => new Promise((resolve) => app.chrome.runtime.onMessage.emit(
+    { type: "updateRouteDestination", routeId, contextId },
+    { id: "test", url: "chrome-extension://test/options/options.html" }, resolve,
+  ));
+  assert.equal((await send("route", "work")).ok, true);
+  assert.deepEqual(app.storage.rauiriState.routes, [{ ...stored.routes[0], contextId: "work" }]);
+  assert.equal((await send("route", "missing")).ok, false);
+  assert.equal((await send("missing", "personal")).ok, false);
+  assert.equal(app.storage.rauiriState.routes[0].contextId, "work");
 });
 
 test("browser initialization rejection does not poison later commands", async () => {
