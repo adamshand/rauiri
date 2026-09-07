@@ -2,6 +2,14 @@
 
 > Based on the [original design conversation](https://chatgpt.com/share/6a83b742-599c-83ec-ac25-d83a6a7bd9a2) and subsequent design review.
 
+## Current direction: live workspace windows
+
+The live-window prototype supersedes the single-window focus model below. A workspace is an automatically remembered activity with its own browser window and native pins. Switching focuses that window and can minimise the other assigned windows; it never closes or transfers the workspace's tabs. URL rules default to background filing, with optional following for active tabs. Migration is explicit and backed up; the old controller stops while window mode is enabled.
+
+Explicit cold storage is deferred until live switching is proven. Read Later and automatic ageing need a separate product pass; old shelves are preserved as named workspaces and sweeping is paused in window mode. See [the window decision](adr/0001-live-workspace-windows.md) and [current usage](../README.md).
+
+**The remainder records the legacy group-mode plan, which remains available before opting into window mode.**
+
 ## Intention
 
 Build a personal Chromium extension that keeps the visible browser focused on the user's current context without losing tabs from other parts of life.
@@ -32,9 +40,9 @@ Chromium does not expose a stable identifier for an open window across browser r
 
 Closing the managed window pauses Rauiri rather than causing another window to be adopted automatically. Restoring the window should allow management to resume.
 
-### Contexts
+### Contexts (buckets)
 
-The initial contexts are:
+Contexts are broad buckets of responsibility, not individual client workspaces. Existing configuration is preserved; the initial defaults are:
 
 - **Personal** — green
 - **Work** — red
@@ -67,9 +75,9 @@ For the prototype:
 - A wildcard matches subdomains at any depth but not the apex hostname; exact rules take priority, followed by the most-specific wildcard.
 - A rule applies when a tab is created or its top-level hostname changes.
 - A rule assigns the site to one context.
-- A routed domain is also persistent and does not age into Read Later automatically.
+- A routed domain is also persistent and does not age into Inactive automatically.
 - Creating a rule offers to move existing matching tabs, showing how many will be affected.
-- If an active tab enters a site routed to an inactive context, Rauiri initially switches to that context with the tab. Whether this is helpful or annoying is an explicit prototype experiment.
+- Classification does not issue a focus-switch command. Native browser behavior can still reveal an active tab's destination group.
 - Background tabs move without changing the active context.
 
 Path-level rules are deferred until real usage demonstrates a need.
@@ -82,12 +90,12 @@ Rauiri supports Chromium’s native global pins, such as ChatGPT, which stay vis
 
 Context-specific pins are intentionally unsupported: Chromium cannot place a compact native pin inside a tab group, and simulating one does not gain native pin behaviour. Pinned tabs never move to Read Later automatically.
 
-### Read Later shelf
+### Shelves
 
-**Read Later is a shelf, not a context.** It is cold storage for unfinished browsing and has a fixed neutral grey identity.
+**Read Later is intentional reading; Inactive is aged unfinished work.** Both shelves retain the originating bucket and use neutral grey groups. Existing Read Later records are left untouched because their original intent cannot be inferred safely.
 
-- Tabs may be sent there manually.
-- An hourly sweep sends eligible tabs there after approximately 72 hours without being accessed.
+- Tabs may be sent to Read Later manually.
+- An hourly sweep sends eligible tabs to Inactive after approximately 72 hours without being accessed.
 - Missed sweeps run when a sleeping laptop wakes, so no special overnight event is required.
 - Active, audible, pinned, and strictly routed tabs are excluded from automatic shelving.
 - All other ordinary tabs are archivable by default.
@@ -96,10 +104,16 @@ Context-specific pins are intentionally unsupported: Chromium cannot place a com
 - Opening a Read Later tab does not restore it to an active context.
 - Returning a tab to its originating context is an explicit action.
 - Tabs opened from a Read Later item inherit both its originating context and its Read Later state.
-- Tabs are unloaded as they enter Read Later. If a shelved tab is reopened without being restored, the hourly sweep unloads it again after roughly two hours.
-- Read Later has unlimited retention and never deletes tabs automatically.
+- Tabs are unloaded as they enter either shelf. If a shelved tab is reopened without being restored, the hourly sweep unloads it again after roughly two hours.
+- Both shelves have unlimited retention and never delete tabs automatically.
 
 When an active tab is sent to Read Later, Rauiri activates the most recently used tab in the same context, then creates a new tab if necessary.
+
+### Saved workspaces
+
+A workspace is an explicitly saved set of selected web URLs within a bucket. It does not add another permanent native group. The popup saves selected tabs with a name and bucket; opening adds missing URLs without closing or reassigning existing tabs in the managed window. Settings lists and deletes saved sets. Replacing a set requires confirmation.
+
+Workspace parking (saving and closing tabs) is deferred. URL sets cannot preserve unsaved forms, navigation history, or full application state.
 
 ### Page state
 
@@ -117,7 +131,7 @@ These concerns should remain conceptually distinct even when the prototype combi
 - **Context:** global, Personal, Work, or Groundtruth
 - **Prominence:** pinned or normal
 - **Lifecycle:** persistent or archivable
-- **Attention state:** current or Read Later
+- **Attention state:** current, Read Later, or Inactive
 
 For the prototype, strict routing implies persistence. These can be separated later if that rule proves too coarse.
 
@@ -130,7 +144,7 @@ The first designated window uses a deliberately simple migration:
 3. Existing pinned tabs become global pins by default.
 4. Tabs can then be moved manually into Work, Groundtruth, or Read Later.
 
-Do not infer initial classifications from browsing history.
+Do not infer initial classifications from browsing history. Re-adoption must preserve existing recovery records.
 
 ## Interaction model
 
@@ -138,7 +152,8 @@ The initial extension popup provides:
 
 - a dropdown for changing the current context;
 - assignment of the current tab to a context;
-- movement of the current tab to Read Later; and
+- movement of the current tab to Read Later;
+- explicit workspace capture and opening in a collapsible section; and
 - access to settings.
 
 Full context, colour, ordering, and rule configuration belongs on a normal extension settings page rather than crowding the popup.
@@ -156,8 +171,8 @@ Build one vertical slice containing:
 5. Native global pins.
 6. Exact-host and wildcard-subdomain routing rules.
 7. Manual movement between contexts and Read Later.
-8. Hourly shelving after 72 hours idle.
-9. Immediate unloading on entry to Read Later, then unloading reopened shelf tabs after two hours idle.
+8. Hourly shelving to Inactive after 72 hours idle.
+9. Immediate unloading on entry to either shelf, then unloading reopened shelf tabs after two hours idle.
 10. YouTube timestamp preservation.
 11. Local persistence across ordinary browser restarts.
 
@@ -169,7 +184,7 @@ The prototype exists to test behaviour, not polish every recovery and configurat
 - Path-level routing rules
 - Activity history and undo
 - Keyboard shortcuts
-- Import/export and configuration sync
+- Configuration sync (local backup import/export is implemented)
 - Generic page-state or scroll restoration
 - Automatic deletion from Read Later
 - A custom sidebar or replacement tab strip
@@ -180,7 +195,7 @@ The prototype exists to test behaviour, not polish every recovery and configurat
 Dogfood the prototype for roughly one week and evaluate:
 
 - Does Helium's collapsed-group UI provide enough visual separation?
-- Does automatic context switching for an actively routed tab help or annoy?
+- Does classification stay quiet without fighting native active-tab behavior?
 - Does the 72-hour sweep remove noise without hiding tabs too early?
 - Is the two-hour Read Later unloading delay appropriate?
 - Are native global pins stable and predictable during switches?
@@ -196,7 +211,7 @@ These results should drive the next design round rather than adding speculative 
 - Add path-level rules where justified.
 - Add recent automatic activity and “undo last move.”
 - Add keyboard switching after actual usage reveals the right interaction.
-- Export and import local configuration as JSON.
+- Consider explicit workspace parking after additive workspace opening is proven.
 - If Helium implements container tabs, optionally associate contexts with isolated identities and cookies.
 - Optionally archive very old Read Later items into Readeck or Linkding, then remove the browser tab only after remote archival is verified. This is retained separately as project idea `IDEA-6f2e5e5d`.
 

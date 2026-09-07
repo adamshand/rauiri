@@ -4,6 +4,12 @@ const COLOR_OPTIONS = TAB_GROUP_COLORS.map((color) => [color, `${color[0].toUppe
 
 const ui = {
   contexts: document.querySelector("#contexts"),
+  windowPreferences: document.querySelector("#window-preferences"),
+  minimizeWorkspaces: document.querySelector("#minimize-workspaces"),
+  saveWindowPreferences: document.querySelector("#save-window-preferences"),
+  exportGroupBackup: document.querySelector("#export-group-backup"),
+  activateRoute: document.querySelector("#activate-route"),
+  activateRouteLabel: document.querySelector("#activate-route-label"),
   contextTemplate: document.querySelector("#context-template"),
   addContext: document.querySelector("#add-context"),
   saveContexts: document.querySelector("#save-contexts"),
@@ -12,12 +18,15 @@ const ui = {
   routeContext: document.querySelector("#route-context"),
   moveExisting: document.querySelector("#move-existing"),
   routes: document.querySelector("#routes"),
+  workspaces: document.querySelector("#workspaces"),
   archiveHours: document.querySelector("#archive-hours"),
   discardHours: document.querySelector("#discard-hours"),
   saveLifecycle: document.querySelector("#save-lifecycle"),
   runSweep: document.querySelector("#run-sweep"),
   importBackup: document.querySelector("#import-backup"),
   exportBackup: document.querySelector("#export-backup"),
+  configurationOnly: document.querySelector("#configuration-only"),
+  exportPreviousBackup: document.querySelector("#export-previous-backup"),
   backupFile: document.querySelector("#backup-file"),
   recoveryCount: document.querySelector("#recovery-count"),
   recoveryList: document.querySelector("#recovery-list"),
@@ -56,23 +65,39 @@ function downloadJson(value, filename) {
 }
 
 async function load() {
-  const currentWindow = await chrome.windows.getCurrent();
-  [snapshot, recoveryRecords] = await Promise.all([
-    send("snapshot", { windowId: currentWindow.id }),
-    send("recoverySnapshot"),
-  ]);
+  snapshot = await send("configurationSnapshot");
   contexts = snapshot.contexts.map((context) => ({ ...context }));
   render();
+  void refreshRecovery().catch((error) => { ui.recoveryCount.textContent = error.message; });
 }
 
 function render() {
+  const windowMode = snapshot.mode === "windows";
+  ui.windowPreferences.hidden = !windowMode;
+  ui.minimizeWorkspaces.checked = snapshot.minimizeOthers === true;
+  ui.activateRouteLabel.hidden = !windowMode;
+  ui.archiveHours.closest("section").hidden = windowMode;
+  ui.recoveryList.closest("section").hidden = windowMode;
+  ui.addContext.hidden = windowMode;
+  ui.saveContexts.textContent = windowMode ? "Save workspaces" : "Save contexts";
+  ui.workspaces.closest("section").querySelector(".section-copy p").textContent = windowMode
+    ? "Live workspaces remember their tabs automatically. Switch without reloading, or resume a closed workspace from its saved URLs."
+    : "Save selected tabs from the popup for a client or task. Opening adds missing pages without closing tabs.";
+  ui.routeForm.closest("section").querySelector(".section-copy p").textContent = windowMode
+    ? "File matching URLs in a workspace without following. Optionally follow an active tab to its destination. Native pins and manual assignments are left alone."
+    : "Use exact hostnames or *.example.com for subdomains. Routed sites stay out of automatic shelving.";
+  ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspace names & order" : "Contexts";
+  ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
+    ? "Rename workspaces here. Create and switch workspace windows from the popup."
+    : "Names, colours, and order map directly to Helium’s native groups.";
   renderContexts();
   renderContextSelect();
   renderRoutes();
+  renderWorkspaces();
   renderRecovery();
   ui.archiveHours.value = snapshot.settings.archiveAfterHours;
   ui.discardHours.value = snapshot.settings.discardReadLaterAfterHours;
-  ui.status.textContent = snapshot.hasManagedWindow ? "Managed window connected" : "No managed window";
+  ui.status.textContent = snapshot.browserWarning || (snapshot.hasManagedWindow ? "Managed window connected" : "No managed window");
 }
 
 function renderContexts() {
@@ -96,6 +121,7 @@ function renderContexts() {
     down.disabled = index === contexts.length - 1;
     up.addEventListener("click", () => moveContext(index, index - 1));
     down.addEventListener("click", () => moveContext(index, index + 1));
+    row.querySelector(".remove").hidden = snapshot.mode === "windows";
     row.querySelector(".remove").addEventListener("click", () => {
       contexts.splice(index, 1);
       renderContexts();
@@ -131,7 +157,7 @@ function renderRoutes() {
     const row = makeElement("div", "route-row");
     const host = makeElement("code", "", route.hostname);
     const contextTitle = snapshot.contexts.find((candidate) => candidate.id === route.contextId)?.title || "Unknown context";
-    const context = makeElement("span", "", contextTitle);
+    const context = makeElement("span", "", `${contextTitle}${snapshot.mode === "windows" ? route.activate ? " · follow" : " · background" : ""}`);
     const remove = document.createElement("button");
     remove.className = "remove";
     remove.type = "button";
@@ -143,6 +169,43 @@ function renderRoutes() {
       await refreshSnapshot();
     }));
     row.append(host, context, remove);
+    return row;
+  }));
+}
+
+function renderWorkspaces() {
+  if (snapshot.mode === "windows") {
+    ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace) => {
+      const row = makeElement("div", "workspace-row");
+      const label = makeElement("span", "", `${workspace.title} · ${workspace.windowId === null ? "Closed" : "Live"} · ${workspace.tabCount} saved pages`);
+      const open = makeElement("button", "quiet", workspace.restoring ? "Finish restoring" : workspace.windowId === null ? "Resume" : "Switch");
+      open.addEventListener("click", () => perform("Opening workspace…", () => send("focusWindowWorkspace", { workspaceId: workspace.id })));
+      row.append(label, open);
+      return row;
+    }));
+    return;
+  }
+  if (!snapshot.workspaces.length) {
+    ui.workspaces.replaceChildren(makeElement("p", "empty", "No saved workspaces. Select tabs and save a workspace from the Rauiri popup."));
+    return;
+  }
+  ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace) => {
+    const row = makeElement("div", "workspace-row");
+    const bucket = snapshot.contexts.find((context) => context.id === workspace.contextId)?.title || "Unknown bucket";
+    const label = makeElement("span", "", `${workspace.title} · ${bucket} · ${workspace.pages.length} pages`);
+    const open = makeElement("button", "quiet", "Open");
+    open.addEventListener("click", () => perform("Opening workspace…", () => send("openWorkspace", { workspaceId: workspace.id }),
+      (result) => `Opened ${result.opened} missing pages; existing tabs kept`));
+    const remove = makeElement("button", "quiet", "Delete");
+    remove.addEventListener("click", () => {
+      if (!window.confirm(`Delete saved workspace “${workspace.title}”? Open tabs stay open.`)) return;
+      perform("Deleting workspace…", async () => {
+        await send("deleteWorkspace", { workspaceId: workspace.id });
+        await refreshSnapshot();
+        renderWorkspaces();
+      });
+    });
+    row.append(label, open, remove);
     return row;
   }));
 }
@@ -200,7 +263,7 @@ function renderRecovery() {
     page.append(title, url);
 
     const meta = makeElement("span", "recovery-meta");
-    const location = makeElement("strong", "", record.attention === "readLater" ? "Read Later" : record.contextTitle);
+    const location = makeElement("strong", "", record.attention === "readLater" ? "Read Later" : record.attention === "inactive" ? "Inactive" : record.contextTitle);
     const seenAt = Number.isFinite(record.lastSeenAt)
       ? new Date(record.lastSeenAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
       : "Date unknown";
@@ -214,9 +277,9 @@ function renderRecovery() {
 }
 
 async function refreshSnapshot() {
-  const currentWindow = await chrome.windows.getCurrent();
-  snapshot = await send("snapshot", { windowId: currentWindow.id });
+  snapshot = await send("configurationSnapshot");
   renderRoutes();
+  renderWorkspaces();
 }
 
 async function refreshRecovery() {
@@ -261,13 +324,14 @@ ui.saveContexts.addEventListener("click", () => perform("Saving contexts…", as
 ui.routeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   let moveExisting = ui.moveExisting.checked;
-  if (moveExisting && snapshot.managedWindowId !== null) {
+  if (moveExisting) {
+    const windowIds = snapshot.mode === "windows" ? snapshot.workspaces.map((item) => item.windowId).filter(Number.isInteger)
+      : Number.isInteger(snapshot.managedWindowId) ? [snapshot.managedWindowId] : [];
     const pattern = cleanHostnameInput(ui.routeHost.value);
-    const tabs = await chrome.tabs.query({ windowId: snapshot.managedWindowId });
-    const matching = tabs.filter((tab) => routeForUrl([{ hostname: pattern }], tab.url)).length;
-    if (matching > 0) {
-      moveExisting = window.confirm(`Move ${matching} existing matching tab${matching === 1 ? "" : "s"} into this context?`);
-    }
+    const routes = [...snapshot.routes.filter((route) => cleanHostnameInput(route.hostname) !== pattern), { id: "preview-route", hostname: pattern }];
+    const tabs = (await Promise.all(windowIds.map((windowId) => chrome.tabs.query({ windowId })))).flat();
+    const matching = tabs.filter((tab) => !tab.pinned && routeForUrl(routes, tab.url)?.id === "preview-route").length;
+    if (matching > 0) moveExisting = window.confirm(`Apply this route to up to ${matching} existing matching tabs? Manual assignments are kept.`);
   }
 
   perform("Adding route…", async () => {
@@ -275,6 +339,7 @@ ui.routeForm.addEventListener("submit", async (event) => {
       hostname: ui.routeHost.value,
       contextId: ui.routeContext.value,
       moveExisting,
+      activate: ui.activateRoute.checked,
     });
     ui.routeHost.value = "";
     await refreshSnapshot();
@@ -291,12 +356,21 @@ ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", 
   await refreshSnapshot();
 }));
 
+ui.saveWindowPreferences.addEventListener("click", () => perform("Saving preferences…", () => send("setWorkspacePreferences", { minimizeOthers: ui.minimizeWorkspaces.checked })));
+ui.exportGroupBackup.addEventListener("click", () => perform("Exporting original backup…", async () => {
+  downloadJson(await send("exportLegacyBackup"), "rauiri-original-groups.json");
+}, "Original group backup exported"));
+
 ui.runSweep.addEventListener("click", () => perform("Running sweep…", () => send("runSweep")));
 
 ui.exportBackup.addEventListener("click", () => perform("Preparing backup…", async () => {
-  const backup = await send("exportBackup");
+  const backup = await send("exportBackup", { configurationOnly: ui.configurationOnly.checked });
   downloadJson(backup, `rauiri-backup-${new Date().toISOString().slice(0, 10)}.json`);
 }, "Backup exported"));
+
+ui.exportPreviousBackup.addEventListener("click", () => perform("Preparing previous backup…", async () => {
+  downloadJson(await send("exportPreviousBackup"), "rauiri-before-import.json");
+}, "Pre-import backup exported"));
 
 ui.importBackup.addEventListener("click", () => {
   ui.backupFile.value = "";
@@ -310,7 +384,9 @@ ui.backupFile.addEventListener("change", async () => {
   try {
     const backup = JSON.parse(await file.text());
     const confirmed = window.confirm(
-      "Import this backup? It will replace Rauiri’s contexts, routes, lifecycle settings, and saved recovery records. Open tabs will remain open and may be reorganized.",
+      backup.format === "rauiri-window-workspaces"
+        ? "Import this workspace backup and enable window mode? All assigned workspace windows must be closed first. It will replace saved workspaces and routes, without opening or closing any tabs."
+        : "Import this backup? It will replace Rauiri’s contexts, routes, lifecycle settings, and saved recovery records. Open tabs will remain open and may be reorganized.",
     );
     if (!confirmed) return;
 

@@ -14,7 +14,7 @@ import {
   normalizeHostname,
   routeForUrl,
   shouldArchiveTab,
-  shouldDiscardReadLater,
+  shouldDiscardShelvedTab,
   stateFromBackup,
   updateYouTubeUrl,
 } from "../src/domain.js";
@@ -99,6 +99,25 @@ test("backup files round-trip configuration and recovery records without a windo
   assert.throws(() => stateFromBackup({ format: "something-else" }), /supported Rauiri backup/);
 });
 
+test("backup validation rejects malformed and future data before migration", () => {
+  const mutations = [
+    (state) => { state.version = 999; },
+    (state) => { state.contexts = [null]; },
+    (state) => { state.contexts[0].title = "Read Later"; },
+    (state) => { state.routes = {}; },
+    (state) => { state.records = []; },
+    (state) => { state.workspaces = [{ id: 'w', title: 'Bad', contextId: 'work', pages: [{ url: 'javascript:alert(1)', title: 'Bad' }] }]; },
+    (state) => { state.settings = {}; },
+    (state) => { state.records.x = { id: "x", contextId: "personal", url: "https://example.com", attention: "bad" }; },
+  ];
+  for (const mutate of mutations) {
+    const backup = createBackup(createInitialState());
+    mutate(backup.state);
+    assert.throws(() => stateFromBackup(backup));
+  }
+  assert.equal(migrateState({ contexts: [null] }).contexts.length, 3);
+});
+
 test("hostname matching is exact and ignores only a leading www", () => {
   const routes = [{ id: "one", hostname: "app.example.com", contextId: "work" }];
   assert.equal(normalizeHostname("https://www.Reddit.com/r/test"), "reddit.com");
@@ -176,6 +195,16 @@ test("native group moves update context, routing suppression, and Read Later sta
   assert.equal(moved.pinned, false);
 });
 
+test("Inactive is separate from intentional reading and is not shelved again", () => {
+  const inactive = record({ attention: "inactive" });
+  assert.equal(groupKeyForRecord(inactive), "inactive");
+  assert.equal(shouldArchiveTab({ tab: tab(), record: inactive, now: NOW, archiveAfterHours: 1 }), false);
+  assert.equal(shouldDiscardShelvedTab({ tab: tab(), record: inactive, now: NOW, discardAfterHours: 2 }), true);
+  assert.equal(assignRecordToGroup(inactive, { groupKey: "work" }), true);
+  assert.equal(inactive.attention, "current");
+  assert.equal(inactive.contextId, "work");
+});
+
 test("ordinary tabs archive after the configured delay", () => {
   assert.equal(shouldArchiveTab({
     tab: tab(),
@@ -210,14 +239,14 @@ test("active, audible, pinned, routed, and already-shelved tabs do not auto-arch
 });
 
 test("Read Later tabs discard after two idle hours but not while active or audible", () => {
-  assert.equal(shouldDiscardReadLater({
+  assert.equal(shouldDiscardShelvedTab({
     tab: tab({ lastAccessed: NOW - (3 * HOUR) }),
     record: record({ attention: "readLater" }),
     now: NOW,
     discardAfterHours: 2,
   }), true);
 
-  assert.equal(shouldDiscardReadLater({
+  assert.equal(shouldDiscardShelvedTab({
     tab: tab({ active: true, lastAccessed: NOW - (3 * HOUR) }),
     record: record({ attention: "readLater" }),
     now: NOW,

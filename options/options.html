@@ -4,17 +4,30 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Rauiri settings</title>
+    <link rel="icon" href="../assets/icon-32.png">
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
     <main>
       <header>
-        <div>
-          <span class="eyebrow">Rauiri</span>
-          <h1>Settings</h1>
+        <div class="settings-title">
+          <img class="settings-icon" src="../assets/icon-128.png" alt="">
+          <div>
+            <span class="eyebrow">Rauiri</span>
+            <h1>Settings</h1>
+          </div>
         </div>
         <p>Shape the contexts. Keep the rules sparse.</p>
       </header>
+
+      <section id="window-preferences" hidden>
+        <div class="section-copy"><h2>Workspace windows</h2><p>Switch without closing tabs. Native pins belong to each workspace window. Automatic shelving is paused in this live-window prototype.</p></div>
+        <div class="section-body">
+          <label class="checkbox"><input id="minimize-workspaces" type="checkbox"><span>Minimise other workspace windows when switching</span></label>
+          <div class="actions"><button id="save-window-preferences" class="primary" type="button">Save preferences</button><button id="export-group-backup" class="quiet" type="button">Export original group backup</button></div>
+          <p class="empty">Ordinary switching never closes tabs. A closed workspace can reopen its last saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached explicitly from the popup.</p>
+        </div>
+      </section>
 
       <section>
         <div class="section-copy">
@@ -49,6 +62,7 @@
               <input id="move-existing" type="checkbox" checked>
               <span>Move existing matches</span>
             </label>
+            <label id="activate-route-label" class="checkbox" hidden><input id="activate-route" type="checkbox"><span>Follow active tabs to the destination workspace</span></label>
             <button class="primary" type="submit">Add route</button>
           </form>
           <div id="routes" class="route-list"></div>
@@ -57,8 +71,16 @@
 
       <section>
         <div class="section-copy">
+          <h2>Workspaces</h2>
+          <p>Save selected tabs from the popup for a client or task. Workspaces live inside buckets, not as permanent extra groups. Opening adds missing pages; it never closes tabs.</p>
+        </div>
+        <div id="workspaces" class="section-body route-list"></div>
+      </section>
+
+      <section>
+        <div class="section-copy">
           <h2>Lifecycle</h2>
-          <p>The hourly sweep shelves stale tabs and cools Read Later without closing anything.</p>
+          <p>The hourly sweep moves stale work to Inactive—not Read Later—and unloads idle shelved tabs without closing anything.</p>
         </div>
         <div class="section-body lifecycle">
           <label>
@@ -66,7 +88,7 @@
             <div><input id="archive-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <label>
-            <span>Unload reopened Read Later tabs after</span>
+            <span>Unload reopened shelved tabs after</span>
             <div><input id="discard-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <div class="actions">
@@ -82,7 +104,9 @@
           <p>Keep a portable copy before reinstalling Rauiri or moving to another browser profile.</p>
         </div>
         <div class="section-body backup-body">
-          <p>The backup includes contexts, routes, lifecycle settings, and saved tab records used by Recovery. Open browser tabs are not duplicated.</p>
+          <p>Full backups include saved page URLs, which may contain private client information or access tokens. Keep them private. Configuration-only exports omit saved pages and workspace URL sets. Imports replace saved state; a pre-import backup is retained locally. Open tabs are never closed.</p>
+          <label class="checkbox"><input id="configuration-only" type="checkbox"><span>Export configuration only (no saved pages)</span></label>
+          <button id="export-previous-backup" class="text-button" type="button">Download pre-import backup</button>
           <div class="actions">
             <button id="import-backup" class="quiet" type="button">Import backup</button>
             <button id="export-backup" class="primary" type="button">Export backup</button>

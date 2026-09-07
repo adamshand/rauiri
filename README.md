@@ -1,54 +1,69 @@
+<img src="assets/icon-128.png" alt="Rauiri icon" width="96" align="right">
+
 # Rauiri
 
-Rauiri is a personal Chromium extension that keeps one browser window focused by context. Inactive contexts collapse into native tab groups; stale browsing settles into a cold Read Later shelf without being closed.
+A personal Chromium extension for focused browsing and resumable client work. Designed for [Helium](https://helium.computer/), using standard Chromium APIs.
 
-The prototype is designed for [Helium](https://helium.computer/) and should also load in Chromium browsers supporting the Chrome 121 extension APIs.
+## Load the extension
 
-## Load the prototype in Helium
+1. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+2. Select this repository and pin Rauiri’s extension icon to the toolbar.
+3. Open the popup in the browser window you want to manage.
 
-1. Open `chrome://extensions` in Helium.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select this repository directory.
-5. Pin Rauiri’s extension icon to the toolbar.
-6. Open the icon in the browser window you want Rauiri to own.
-7. Choose **Manage this window**.
+## Live workspace windows — experimental
 
-Adoption intentionally puts every ordinary tab in **Personal** and treats existing pinned tabs as global pins. Temporary and incognito windows are ignored.
+In the popup, expand **Try workspace windows** and choose **Use workspace windows**. Migration is explicit: existing grouped tabs move into separate windows without being reloaded or closed. Native pinned tabs remain in the original window. Your old configuration and recovery records are retained; download the original group backup from Settings.
 
-## First-use workflow
+Each workspace has its own live browser window and its own native pins. The searchable popup lists current, live, and closed workspaces:
 
-- Change context from the dropdown in the extension popup, or expand a context group in the tab strip. Context groups behave like an accordion.
-- Assign the current tab to a different context from **Belongs to**.
-- Use Chromium’s normal tab-menu **Pin** action for global tabs that stay visible in every context.
-- Send unfinished browsing to **Read Later** from the popup.
-- Open **Settings** to rename/recolour contexts, create exact-host or `*.example.com` routing rules, tune lifecycle delays, or export/import a complete Rauiri backup.
+- **Switch** focuses the existing window without recreating tabs.
+- **New workspace** creates a separate window for a client, project, or personal area.
+- Tab URLs, order, titles, and pinning are remembered automatically. No repeated Save action.
+- **File this tab without following** moves it in the background, keeping the source window alive and activating a local fallback when necessary.
+- Settings can minimise the other assigned workspace windows when switching. Unrelated windows are never minimised.
+- Routes default to background filing. Check **Follow active tabs to the destination workspace** for rules that should take you there. Background tabs never steal focus, even for follow rules.
+- Exact hostname rules win over wildcards; the most specific wildcard wins. Manually assigned URLs and native pinned tabs are not automatically rerouted. Navigating a manually assigned tab to a different URL allows routing again.
 
-Strict routes are intended only for sites that always belong to one context. Wildcards match subdomains at any depth but not the apex hostname; exact routes take priority. A routed hostname is also protected from automatic shelving. Ambiguous sites should inherit from their opener or the current context instead.
+This is a live-window prototype, not automatic cold storage. **Switching never closes tabs.** If you close a whole workspace window through the browser, Rauiri retains its last captured web URLs and pinning for explicit resumption. This is not a guarantee of unsaved forms, application state, history, or a complete browser session. Browser memory management can still unload tabs.
 
-## Automatic lifecycle
+### Restart and recovery
 
-Once per hour Rauiri:
+Runtime window associations are stored in session storage. After a browser restart, Rauiri reconnects only unique exact sets of saved web URLs. It does not loosely guess ownership from one overlapping page. If automatic matching is ambiguous or restoration is incomplete, open the popup in the restored window and choose **Use this window** for its workspace. The previous tab list is retained in the full backup as `savedBeforeAttach`.
 
-- moves eligible ordinary tabs to Read Later after 72 hours idle;
-- leaves active, audible, pinned, and strictly routed tabs alone; and
-- unloads tabs as they enter Read Later, then unloads reopened shelf tabs after 2 hours idle.
+Do not resume a closed-looking workspace if the browser is still restoring it—wait or attach the restored window instead. The prototype has no automatic tab-closing, workspace deletion, or "put away" action yet.
 
-YouTube playback position is written into the URL before shelving or unloading when the page permits it. Rauiri never closes tabs automatically.
+### Backups
 
-## Prototype caveats
+- Full window-workspace backups include saved URLs, pins, routes, and legacy recovery data. URLs can contain private client information or access tokens; keep these files private.
+- Configuration-only backups retain workspace names and rules but omit all saved page lists and legacy records.
+- Import validates first. Existing assigned workspace windows must be closed before replacement; importing does not open or close tabs. Fresh installations can import window-workspace backups directly.
+- Settings offers a pre-import backup and the original group-mode backup. The legacy Recovery panel is hidden in window mode; its records remain in the original/full backups.
+- Only HTTP(S) pages are saved for resumption. Browser-internal pages, extension pages, forms, and navigation history are not session backups.
 
-- Native tab groups in the managed window are reserved for contexts.
-- Active navigation into a strictly routed hostname switches to that hostname’s context. This is intentionally experimental.
-- Managed-window recovery uses the distinctive Rauiri groups and known tabs because Chromium does not provide stable window IDs across restarts.
-- Recovery in Settings lists stored web pages that no longer match an open tab; selected records can be copied, exported, or reopened.
-- Backup files include contexts, routes, lifecycle settings, and all saved recovery records, but not the browser’s open tabs themselves.
-- This is a recovery snapshot rather than a full activity history: it records the latest known tab state, not every movement event.
-- All state is stored locally through Chromium extension storage.
+### Current limitations
+
+- Workspace names appear in Rauiri, not as custom OS window titles.
+- There is no nested workspace hierarchy yet; naming and search keep the list manageable.
+- Automatic Read Later/Inactive sweeping is paused in window mode. Existing shelves become named workspaces so their live tabs are preserved.
+- A timed-out browser edit is not replayed. Mutations wait for its result; Settings and exports remain accessible. A permanently unresponsive browser API can still require reloading the extension.
+- Minimise and focus behavior has been smoke-tested in Chromium; Helium/macOS dogfooding remains important.
+
+## Original group mode
+
+Until you enable window workspaces, Rauiri keeps the original single-window workflow:
+
+- **Manage this window** puts ordinary tabs in Personal and preserves existing recovery records.
+- Broad buckets use accordion tab groups. **Move this tab…** files the current tab elsewhere.
+- Native pins are global within that one window.
+- **Client & project tab sets** are explicit saved URL snapshots, not live workspaces.
+- Automatic shelving sends eligible tabs to Inactive after 72 idle hours. Read Later is intentional reading; both shelves unload idle tabs after two hours. Active, audible, pinned, and strictly routed tabs are excluded from automatic shelving.
+- Settings includes backup import/export and missing-page Recovery. Rauiri never closes tabs automatically.
+
+Window mode disables the old group controller rather than running both systems concurrently. The original state is retained separately; migration does not automatically rewrite or delete it.
 
 ## Development
 
-The extension uses browser-native JavaScript modules and has no build step.
+Browser-native JavaScript modules; no build step.
 
 ```sh
 npm run hooks:install
@@ -56,15 +71,16 @@ npm test
 npm run check
 ```
 
-The tracked pre-commit hook patch-bumps `manifest.json` and `package.json` together whenever staged extension files change. Run `npm run version:patch` to bump them manually.
-
-After changing extension files, return to `chrome://extensions` and reload Rauiri.
+The tracked pre-commit hook patch-bumps `manifest.json` and `package.json` together for extension changes. After changing files, reload Rauiri in `chrome://extensions`.
 
 ## Project files
 
-- [`docs/PLAN.md`](docs/PLAN.md) — product intent and prototype contract
-- [`src/background.js`](src/background.js) — browser orchestration and persistence
-- [`src/domain.js`](src/domain.js) — testable classification and lifecycle rules
-- [`popup/`](popup/) — context and current-tab controls
-- [`options/`](options/) — contexts, routes, and lifecycle settings
-- [`test/`](test/) — domain tests
+- [`src/window-workspaces.js`](src/window-workspaces.js) — live-window ownership, tracking, routing, and backup boundary
+- [`src/background.js`](src/background.js) — message dispatch and legacy group orchestration
+- [`src/domain.js`](src/domain.js) — legacy classification, lifecycle, and backup rules
+- [`popup/`](popup/) — workspace switcher and tab actions
+- [`options/`](options/) — workspace names, routes, preferences, and backups
+- [`test/`](test/) — domain and mocked-browser regression tests
+- [`CONTEXT.md`](CONTEXT.md) — product vocabulary
+- [`docs/adr/0001-live-workspace-windows.md`](docs/adr/0001-live-workspace-windows.md) — why live workspaces use separate windows
+- [`docs/PLAN.md`](docs/PLAN.md) — original group prototype and subsequent direction

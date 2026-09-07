@@ -1,6 +1,8 @@
 import {
   READ_LATER_ID,
   READ_LATER_TITLE,
+  INACTIVE_ID,
+  INACTIVE_TITLE,
   TAB_GROUP_COLORS,
   assignRecordToGroup,
   attentionForNewTab,
@@ -11,28 +13,40 @@ import {
   findRecoverableRecords,
   groupKeyForRecord,
   isValidRouteHostname,
+  isRoutableUrl,
   makeRecord,
   migrateState,
   normalizeHostname,
   routeForUrl,
   shouldArchiveTab,
-  shouldDiscardReadLater,
+  shouldDiscardShelvedTab,
   stateFromBackup,
   updateYouTubeUrl,
 } from "./domain.js";
+import { createWindowWorkspaces } from "./window-workspaces.js";
 
+const windowWorkspaces = createWindowWorkspaces(chrome);
 const STATE_KEY = "rauiriState";
 const SESSION_WINDOW_KEY = "rauiriManagedWindowId";
 const SWEEP_ALARM = "rauiri-hourly-sweep";
-const READ_LATER_COLOR = "grey";
+const SHELF_TITLES = new Map([[READ_LATER_ID, READ_LATER_TITLE], [INACTIVE_ID, INACTIVE_TITLE]]);
 
 let state = createInitialState();
 let tabRecords = new Map();
 let groupIds = new Map();
 const mutedTabs = new Set();
+const observedGroups = new Map();
+const detachedRecords = new Map();
 let operation = Promise.resolve();
+let pendingBrowserEdit = null;
+let browserWarning = null;
 
-const ready = initialize();
+// UI reads depend only on durable state, never on tab-strip presentation.
+const ready = loadState();
+runEvent(initializeBrowser);
+void ready.then(() => {
+  if (windowWorkspaces.enabled) return windowWorkspaces.start();
+}).catch((error) => { browserWarning = error.message; });
 
 function run(task) {
   const result = operation.then(() => ready).then(() => task());
@@ -41,7 +55,10 @@ function run(task) {
 }
 
 function runEvent(task) {
-  void run(task).catch((error) => console.warn("Rauiri browser event failed:", error));
+  void run(() => { if (!windowWorkspaces.enabled) return task(); }).catch((error) => {
+    browserWarning = error?.message || String(error);
+    console.warn("Rauiri browser event failed:", error);
+  });
 }
 
 function isTabEditLocked(error) {
@@ -53,12 +70,27 @@ function isMissingGroup(error) {
 }
 
 async function browserEditAttempt(task, timeoutMs = 1000) {
+  if (pendingBrowserEdit) throw new Error("A browser edit is still pending. Settings and backups remain available.");
   let timeout;
+  let timedOut = false;
+  const request = Promise.resolve().then(task);
+  pendingBrowserEdit = request;
+  const settled = () => {
+    pendingBrowserEdit = null;
+    if (timedOut) runEvent(async () => {
+      await reconcileManagedWindow();
+      browserWarning = null;
+    });
+  };
+  void request.then(settled, settled);
   try {
     return await Promise.race([
-      Promise.resolve().then(task),
+      request,
       new Promise((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("Browser edit timed out.")), timeoutMs);
+        timeout = setTimeout(() => {
+          timedOut = true;
+          reject(new Error("Browser edit timed out; waiting for its outcome before more edits."));
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -77,11 +109,15 @@ async function retryBrowserEdit(task, attempts = 4) {
   }
 }
 
-async function initialize() {
+async function loadState() {
+  await windowWorkspaces.ready;
   const stored = await chrome.storage.local.get(STATE_KEY);
   state = migrateState(stored[STATE_KEY]);
   state.managedWindowId = null;
+}
 
+async function initializeBrowser() {
+  await ensureSweepAlarm();
   const session = await chrome.storage.session.get(SESSION_WINDOW_KEY);
   const runtimeWindowId = session[SESSION_WINDOW_KEY];
   if (Number.isInteger(runtimeWindowId) && await windowExists(runtimeWindowId)) {
@@ -90,12 +126,8 @@ async function initialize() {
     await discoverManagedWindow();
   }
 
-  if (state.managedWindowId !== null) {
-    await reconcileManagedWindow();
-  }
-
-  await ensureSweepAlarm();
   await persist();
+  if (state.managedWindowId !== null) await reconcileManagedWindow();
 }
 
 async function persist() {
@@ -131,7 +163,7 @@ async function discoverManagedWindow() {
   const knownUrls = new Set(Object.values(state.records).map((record) => record.url).filter(Boolean));
   const knownTitles = new Set([
     ...state.contexts.map((context) => context.title),
-    READ_LATER_TITLE,
+    ...SHELF_TITLES.values(),
   ]);
 
   const scored = [];
@@ -155,18 +187,22 @@ function contextById(contextId) {
 }
 
 function contextKeyForGroup(group) {
-  if (group.title === READ_LATER_TITLE) return READ_LATER_ID;
+  const associated = [...groupIds].find(([, id]) => id === group.id)?.[0];
+  if (associated) return associated;
+  for (const [id, title] of SHELF_TITLES) if (group.title === title) return id;
   return state.contexts.find((context) => context.title === group.title)?.id || null;
 }
 
 async function refreshGroupIds() {
-  groupIds = new Map();
-  if (state.managedWindowId === null) return [];
+  if (state.managedWindowId === null) { groupIds.clear(); return []; }
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
+  const next = new Map();
   for (const group of groups) {
     const key = contextKeyForGroup(group);
-    if (key && !groupIds.has(key)) groupIds.set(key, group.id);
+    if (key && !next.has(key)) next.set(key, group.id);
+    observedGroups.set(group.id, group.collapsed);
   }
+  groupIds = next;
   return groups;
 }
 
@@ -182,12 +218,12 @@ async function reconcileManagedWindow() {
   for (const tab of tabs) {
     const url = tab.url || tab.pendingUrl || "";
     const groupKey = groupKeys.get(tab.groupId);
-    const attention = groupKey === READ_LATER_ID ? "readLater" : "current";
-    const groupContext = groupKey && groupKey !== READ_LATER_ID ? groupKey : null;
+    const attention = groupKey === READ_LATER_ID ? "readLater" : groupKey === INACTIVE_ID ? "inactive" : "current";
+    const groupContext = groupKey && !SHELF_TITLES.has(groupKey) ? groupKey : null;
     const candidates = [...unmatched.values()].filter((record) => {
       if (record.url !== url) return false;
       if (groupContext && record.contextId !== groupContext) return false;
-      if (attention === "readLater" && record.attention !== "readLater") return false;
+      if (attention !== "current" && record.attention !== attention) return false;
       return true;
     });
 
@@ -208,7 +244,7 @@ async function reconcileManagedWindow() {
     record.title = tab.title || record.title;
     record.lastSeenAt = Date.now();
     if (groupContext) record.contextId = groupContext;
-    if (attention === "readLater") record.attention = "readLater";
+    if (attention !== "current") record.attention = attention;
     record.pinned = tab.pinned;
     tabRecords.set(tab.id, record.id);
   }
@@ -248,7 +284,7 @@ async function ensureRecord(tab) {
 }
 
 async function syncRecordToGroup(tab, groupKey) {
-  if (groupKey !== READ_LATER_ID && !contextById(groupKey)) return false;
+  if (!SHELF_TITLES.has(groupKey) && !contextById(groupKey)) return false;
   const record = await ensureRecord(tab);
   const url = tab.url || tab.pendingUrl;
   return assignRecordToGroup(record, {
@@ -303,8 +339,8 @@ async function ensureGroup(key, tabIds) {
   if (created) {
     const context = contextById(key);
     await retryBrowserEdit(() => chrome.tabGroups.update(groupId, {
-      title: key === READ_LATER_ID ? READ_LATER_TITLE : context?.title || "Context",
-      color: key === READ_LATER_ID ? READ_LATER_COLOR : context?.color || "grey",
+      title: SHELF_TITLES.get(key) || context?.title || "Context",
+      color: SHELF_TITLES.has(key) ? "grey" : context?.color || "grey",
     }));
     await orderGroups();
   }
@@ -322,10 +358,13 @@ async function ungroupTab(tab) {
 }
 
 async function trySetGroupCollapsed(groupId, collapsed) {
+  if (observedGroups.get(groupId) === collapsed) return;
+  observedGroups.set(groupId, collapsed);
   try {
     await retryBrowserEdit(() => chrome.tabGroups.update(groupId, { collapsed }));
   } catch {
-    // The active tab or group may have changed while this operation was queued.
+    // Re-observe after uncertain outcomes rather than replaying a stale command.
+    observedGroups.delete(groupId);
   }
 }
 
@@ -355,7 +394,7 @@ function mostRecentTab(tabs, predicate = () => true) {
 }
 
 async function orderGroups() {
-  const desired = [...state.contexts.map((context) => context.id), READ_LATER_ID];
+  const desired = [...state.contexts.map((context) => context.id), ...SHELF_TITLES.keys()];
   for (const key of desired) {
     const groupId = groupIds.get(key);
     if (!Number.isInteger(groupId)) continue;
@@ -405,7 +444,7 @@ async function enforcePresentation({ activateTarget = true, preferredTabId = nul
   for (const group of groups) {
     const key = contextKeyForGroup(group);
     if (!key) continue;
-    const collapsed = key === READ_LATER_ID || key !== state.activeContextId;
+    const collapsed = key !== state.activeContextId;
     if (group.collapsed === collapsed) continue;
     await trySetGroupCollapsed(group.id, collapsed);
   }
@@ -421,6 +460,8 @@ async function adoptWindow(windowId) {
     contexts: state.contexts,
     routes: state.routes,
     settings: state.settings,
+    records: { ...state.records },
+    workspaces: state.workspaces,
     activeContextId: initialContextId,
     managedWindowId: windowId,
   };
@@ -437,6 +478,8 @@ async function adoptWindow(windowId) {
     tabRecords.set(tab.id, record.id);
   }
 
+  // Save the adoption before attempting fallible browser edits.
+  await persist();
   const unpinned = (window.tabs || []).filter((tab) => !tab.pinned).map((tab) => tab.id);
   if (unpinned.length) await ensureGroup(initialContextId, unpinned);
   await enforcePresentation({ activateTarget: false });
@@ -472,16 +515,14 @@ async function enforceAccordion(updatedGroup) {
   if (!key) return;
 
   const membershipChanged = await syncGroupMembership(expandedGroup);
-  if (key !== READ_LATER_ID && key !== state.activeContextId) {
-    await switchContext(key);
-    return;
-  }
+  const contextChanged = !SHELF_TITLES.has(key) && key !== state.activeContextId;
+  if (contextChanged) state.activeContextId = key;
 
   // Expanding a group label does not necessarily activate one of its tabs.
   // Chromium refuses to collapse whichever group still contains the active tab,
   // so focus the selected group before closing the others.
   await activateMostRecentTabInGroup(expandedGroup);
-  if (membershipChanged) await persist();
+  if (membershipChanged || contextChanged) await persist();
 
   const groups = await chrome.tabGroups.query({ windowId: state.managedWindowId });
   for (const group of groups) {
@@ -491,7 +532,7 @@ async function enforceAccordion(updatedGroup) {
 }
 
 async function applyRouting(tab, record) {
-  if (record.attention === "readLater") return;
+  if (record.attention !== "current") return;
   const hostname = normalizeHostname(tab.url || tab.pendingUrl);
   if (record.routeSuppressedHostname && record.routeSuppressedHostname !== hostname) {
     record.routeSuppressedHostname = null;
@@ -503,15 +544,22 @@ async function applyRouting(tab, record) {
   const contextChanged = route.contextId !== record.contextId;
   record.contextId = route.contextId;
   record.originContextId = route.contextId;
-  if (tab.active && route.contextId !== state.activeContextId) {
-    await switchContext(route.contextId, tab.id);
-  } else if (contextChanged) {
-    await presentTab(tab, record);
+  // Classification is not a focus command. Do not select a different tab.
+  if (contextChanged) await presentTab(tab, record);
+}
+
+async function managedTab(tabId) {
+  if (!Number.isInteger(tabId)) throw new Error("Choose a tab.");
+  const tab = await chrome.tabs.get(tabId);
+  if (state.managedWindowId === null || tab.windowId !== state.managedWindowId || tab.incognito) {
+    throw new Error("This tab is not in Rauiri’s managed window.");
   }
+  return tab;
 }
 
 async function moveTabToContext(tabId, contextId) {
-  let tab = await chrome.tabs.get(tabId);
+  if (!contextById(contextId)) throw new Error("Choose a valid context.");
+  let tab = await managedTab(tabId);
   const record = await ensureRecord(tab);
   const route = routeForUrl(state.routes, tab.url);
   if (route && route.contextId !== contextId) {
@@ -586,12 +634,17 @@ async function discardTab(tabId) {
   }
 }
 
-async function moveTabToReadLater(tabId) {
-  let tab = await chrome.tabs.get(tabId);
+async function moveTabToShelf(tabId, attention = "readLater") {
+  let tab = await managedTab(tabId);
   const record = await ensureRecord(tab);
+  // A long sweep's original snapshot may be stale by the time we reach this tab.
+  if (attention === "inactive" && !shouldArchiveTab({
+    tab, record, route: routeForUrl(state.routes, tab.url), now: Date.now(),
+    archiveAfterHours: state.settings.archiveAfterHours,
+  })) return;
   const wasActive = tab.active;
   record.originContextId = record.contextId;
-  record.attention = "readLater";
+  record.attention = attention;
   record.pinned = false;
   record.routeSuppressedHostname = null;
   record.url = await captureYouTubeTimestamp(tab);
@@ -605,7 +658,7 @@ async function moveTabToReadLater(tabId) {
 }
 
 async function restoreReadLaterTab(tabId) {
-  const tab = await chrome.tabs.get(tabId);
+  const tab = await managedTab(tabId);
   const record = await ensureRecord(tab);
   record.attention = "current";
   record.contextId = contextById(record.originContextId) ? record.originContextId : state.activeContextId;
@@ -630,11 +683,11 @@ async function runSweep() {
       now,
       archiveAfterHours: state.settings.archiveAfterHours,
     })) {
-      await moveTabToReadLater(tab.id);
+      await moveTabToShelf(tab.id, "inactive");
       continue;
     }
 
-    if (shouldDiscardReadLater({
+    if (shouldDiscardShelvedTab({
       tab,
       record,
       now,
@@ -647,8 +700,19 @@ async function runSweep() {
   await persist();
 }
 
+function configurationSnapshot() {
+  return {
+    contexts: state.contexts,
+    routes: state.routes,
+    settings: state.settings,
+    workspaces: state.workspaces,
+    browserWarning,
+    managedWindowId: state.managedWindowId,
+    hasManagedWindow: state.managedWindowId !== null,
+  };
+}
+
 async function currentSnapshot(windowId, tabId = null) {
-  if (state.managedWindowId === null) await discoverManagedWindow();
   const managed = state.managedWindowId === windowId;
   let currentTab = null;
   let currentRecord = null;
@@ -660,11 +724,9 @@ async function currentSnapshot(windowId, tabId = null) {
     if (!currentTab) {
       [currentTab] = await chrome.tabs.query({ windowId, active: true });
     }
-    if (currentTab) currentRecord = await ensureRecord(currentTab);
+    if (currentTab) currentRecord = recordForTab(currentTab.id);
   }
 
-  const readLaterCount = [...new Set(tabRecords.values())]
-    .filter((recordId) => state.records[recordId]?.attention === "readLater").length;
   return {
     managed,
     hasManagedWindow: state.managedWindowId !== null,
@@ -673,13 +735,14 @@ async function currentSnapshot(windowId, tabId = null) {
     contexts: state.contexts,
     routes: state.routes,
     settings: state.settings,
-    readLaterCount,
+    workspaces: state.workspaces,
     currentTab: currentTab ? {
       id: currentTab.id,
       title: currentTab.title,
       url: currentTab.url,
     } : null,
     currentRecord,
+    browserWarning,
   };
 }
 
@@ -691,20 +754,26 @@ async function recoverableRecords() {
   });
 }
 
-function backupSnapshot() {
-  return createBackup(state, { extensionVersion: chrome.runtime.getManifest().version });
+function backupSnapshot(configurationOnly = false) {
+  const source = configurationOnly ? { ...state, records: {}, workspaces: [] } : state;
+  return createBackup(source, { extensionVersion: chrome.runtime.getManifest().version });
 }
 
 async function importBackup(backup) {
   const managedWindowId = state.managedWindowId !== null && await windowExists(state.managedWindowId)
     ? state.managedWindowId
     : null;
-  state = stateFromBackup(backup, { managedWindowId });
+  const imported = stateFromBackup(backup, { managedWindowId });
+  // A single storage write retains the previous state and commits the import.
+  // Browser presentation is deliberately not part of this transaction.
+  await chrome.storage.local.set({
+    rauiriBeforeImport: backupSnapshot(),
+    [STATE_KEY]: imported,
+  });
+  state = imported;
   tabRecords = new Map();
   groupIds = new Map();
-
-  if (managedWindowId !== null) await reconcileManagedWindow();
-  else await persist();
+  if (managedWindowId !== null) runEvent(reconcileManagedWindow);
 
   return {
     contexts: state.contexts.length,
@@ -753,6 +822,55 @@ async function reopenRecords(recordIds, fallbackWindowId) {
   return { reopened };
 }
 
+async function saveWorkspace({ id, title, contextId }) {
+  if (!contextById(contextId)) throw new Error("Choose a bucket for this workspace.");
+  if (typeof title !== "string" || !title.trim()) throw new Error("Name the workspace.");
+  if (id && !state.workspaces.some((workspace) => workspace.id === id)) throw new Error("Unknown workspace.");
+  if (state.managedWindowId === null) throw new Error("Manage a window before saving selected tabs.");
+  const tabs = await chrome.tabs.query({ windowId: state.managedWindowId, highlighted: true });
+  const pages = [...new Map(tabs.filter((tab) => !tab.incognito && isRoutableUrl(tab.url))
+    .map((tab) => [tab.url, { url: tab.url, title: tab.title || tab.url }])).values()];
+  if (!pages.length) throw new Error("Select at least one web page in the managed window first.");
+  const workspace = { id: id || crypto.randomUUID(), title: title.trim(), contextId, pages };
+  state.workspaces = [...state.workspaces.filter((candidate) => candidate.id !== workspace.id), workspace];
+  await persist();
+  return { saved: pages.length };
+}
+
+async function openWorkspace(workspaceId) {
+  const workspace = state.workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) throw new Error("Unknown workspace.");
+  if (state.managedWindowId === null || !await windowExists(state.managedWindowId)) {
+    throw new Error("Manage a window before opening a workspace.");
+  }
+  const openTabs = await chrome.tabs.query({ windowId: state.managedWindowId });
+  const urls = new Set(openTabs.map((tab) => tab.url || tab.pendingUrl));
+  let opened = 0;
+  let target = null;
+  try {
+    for (const page of workspace.pages) {
+      if (urls.has(page.url)) continue;
+      const tab = await chrome.tabs.create({ windowId: state.managedWindowId, url: page.url, active: false });
+      const record = makeRecord({ tab, contextId: workspace.contextId });
+      const route = routeForUrl(state.routes, page.url);
+      record.routeSuppressedHostname = route && route.contextId !== workspace.contextId ? normalizeHostname(page.url) : null;
+      state.records[record.id] = record;
+      tabRecords.set(tab.id, record.id);
+      urls.add(page.url);
+      opened++;
+      target ||= tab;
+      await presentTab(tab, record);
+    }
+    // Opening is explicit, but never steals or reassigns an existing tab from another bucket.
+    target ||= openTabs.find((tab) => workspace.pages.some((page) => page.url === tab.url)
+      && recordForTab(tab.id)?.contextId === workspace.contextId);
+    if (target) await retryBrowserEdit(() => chrome.tabs.update(target.id, { active: true }));
+  } finally {
+    await persist();
+  }
+  return { opened };
+}
+
 async function saveContexts(contexts) {
   await refreshGroupIds();
   const existingGroupIds = new Map(groupIds);
@@ -763,6 +881,10 @@ async function saveContexts(contexts) {
     order: index,
   }));
   if (!cleaned.length) throw new Error("Keep at least one context.");
+  if (cleaned.some((context) => [...SHELF_TITLES.keys(), "__proto__", "constructor", "prototype"].includes(context.id)
+    || [...SHELF_TITLES.values()].some((title) => context.title.toLowerCase() === title.toLowerCase()))) {
+    throw new Error("Choose a context name and ID other than the reserved shelf names.");
+  }
   if (new Set(cleaned.map((context) => context.id)).size !== cleaned.length) {
     throw new Error("Context IDs must be unique.");
   }
@@ -771,7 +893,7 @@ async function saveContexts(contexts) {
   }
 
   const usedIds = new Set(Object.values(state.records).map((record) => record.contextId));
-  const routedIds = new Set(state.routes.map((route) => route.contextId));
+  const routedIds = new Set([...state.routes, ...state.workspaces].map((item) => item.contextId));
   for (const oldContext of state.contexts) {
     if (!cleaned.some((context) => context.id === oldContext.id) && (usedIds.has(oldContext.id) || routedIds.has(oldContext.id))) {
       throw new Error(`${oldContext.title} still contains tabs or routing rules.`);
@@ -809,16 +931,12 @@ async function addRoute(hostname, contextId, moveExisting = true) {
   if (moveExisting && state.managedWindowId !== null) {
     const tabs = await chrome.tabs.query({ windowId: state.managedWindowId });
     for (const tab of tabs) {
-      if (!routeForUrl([route], tab.url)) continue;
+      if (routeForUrl(state.routes, tab.url)?.id !== route.id) continue;
       const record = await ensureRecord(tab);
-      if (record.attention === "readLater") continue;
+      if (record.attention !== "current" || record.routeSuppressedHostname === normalizeHostname(tab.url)) continue;
       record.contextId = contextId;
       record.originContextId = contextId;
-      if (tab.active && contextId !== state.activeContextId) {
-        await switchContext(contextId, tab.id);
-      } else {
-        await presentTab(tab, record);
-      }
+      await presentTab(tab, record);
       moved += 1;
     }
   }
@@ -851,7 +969,31 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.tabGroups.onUpdated.addListener((group) => {
-  runEvent(() => enforceAccordion(group));
+  const wasCollapsed = observedGroups.get(group.id);
+  observedGroups.set(group.id, group.collapsed);
+  // Metadata changes and our own writes are not user selection commands.
+  if (wasCollapsed === true && group.collapsed === false) runEvent(() => enforceAccordion(group));
+});
+
+chrome.tabs.onDetached.addListener((tabId) => {
+  runEvent(() => {
+    const recordId = tabRecords.get(tabId);
+    if (recordId) detachedRecords.set(tabId, recordId);
+    tabRecords.delete(tabId);
+  });
+});
+
+chrome.tabs.onAttached.addListener((tabId, info) => {
+  runEvent(async () => {
+    if (info.newWindowId !== state.managedWindowId) return;
+    const tab = await managedTab(tabId);
+    const recordId = detachedRecords.get(tabId);
+    detachedRecords.delete(tabId);
+    if (state.records[recordId]) tabRecords.set(tabId, recordId);
+    const record = await ensureRecord(tab);
+    await presentTab(tab, record);
+    await persist();
+  });
 });
 
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
@@ -861,15 +1003,13 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
     // Activation events can also be stale by the time queued orchestration runs.
     if (!tab.active || tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) return;
     const group = await chrome.tabGroups.get(tab.groupId);
-    const key = contextKeyForGroup(group);
-    if (key && key !== READ_LATER_ID && key !== state.activeContextId) {
-      await switchContext(key, tabId);
-    }
+    if (contextKeyForGroup(group)) await enforceAccordion(group);
   });
 });
 
-chrome.tabs.onCreated.addListener((tab) => {
+chrome.tabs.onCreated.addListener((createdTab) => {
   runEvent(async () => {
+    const tab = await chrome.tabs.get(createdTab.id);
     if (tab.windowId !== state.managedWindowId) return;
     const record = await ensureRecord(tab);
     await presentTab(tab, record);
@@ -918,6 +1058,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   runEvent(async () => {
     const recordId = tabRecords.get(tabId);
     tabRecords.delete(tabId);
+    detachedRecords.delete(tabId);
     if (recordId && !removeInfo.isWindowClosing) delete state.records[recordId];
     await persist();
   });
@@ -934,10 +1075,26 @@ chrome.windows.onRemoved.addListener((windowId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  run(async () => {
+  const trustedPages = ["popup/popup.html", "options/options.html"].map((path) => chrome.runtime.getURL(path));
+  if (sender.id !== chrome.runtime.id || !trustedPages.includes(sender.url?.split(/[?#]/)[0])) {
+    sendResponse({ ok: false, error: "Rauiri commands must come from its popup or Settings." });
+    return false;
+  }
+  const readOnly = new Set(["snapshot", "configurationSnapshot", "recoverySnapshot", "exportBackup", "exportPreviousBackup", "exportLegacyBackup", "openOptions"]);
+  const execute = readOnly.has(message?.type) ? (task) => ready.then(task) : run;
+  execute(async () => {
+    if (message?.type === "enableWindowWorkspaces") {
+      await windowWorkspaces.enable(structuredClone(state), message.windowId, Object.fromEntries(tabRecords));
+      return windowWorkspaces.handle({ type: "snapshot", windowId: message.windowId });
+    }
+    if (windowWorkspaces.enabled || (message?.type === "importBackup" && message.backup?.format === "rauiri-window-workspaces")) {
+      return windowWorkspaces.handle(message);
+    }
     switch (message?.type) {
       case "snapshot":
         return currentSnapshot(message.windowId, message.tabId);
+      case "configurationSnapshot":
+        return configurationSnapshot();
       case "adoptWindow":
         await adoptWindow(message.windowId);
         return currentSnapshot(message.windowId, message.tabId);
@@ -948,10 +1105,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await moveTabToContext(message.tabId, message.contextId);
         return { ok: true };
       case "moveTabToReadLater":
-        await moveTabToReadLater(message.tabId);
+        await moveTabToShelf(message.tabId);
         return { ok: true };
       case "restoreReadLaterTab":
         await restoreReadLaterTab(message.tabId);
+        return { ok: true };
+      case "saveWorkspace":
+        return saveWorkspace(message.workspace);
+      case "openWorkspace":
+        return openWorkspace(message.workspaceId);
+      case "deleteWorkspace":
+        state.workspaces = state.workspaces.filter((workspace) => workspace.id !== message.workspaceId);
+        await persist();
         return { ok: true };
       case "saveContexts":
         await saveContexts(message.contexts);
@@ -980,7 +1145,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "recoverySnapshot":
         return recoverySnapshot();
       case "exportBackup":
-        return backupSnapshot();
+        return backupSnapshot(message.configurationOnly === true);
+      case "exportPreviousBackup": {
+        const stored = await chrome.storage.local.get("rauiriBeforeImport");
+        if (!stored.rauiriBeforeImport) throw new Error("No pre-import backup is available yet.");
+        return stored.rauiriBeforeImport;
+      }
       case "importBackup":
         return importBackup(message.backup);
       case "reopenRecords":

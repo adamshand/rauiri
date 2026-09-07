@@ -12,6 +12,14 @@ const colors = {
 
 const ui = {
   status: document.querySelector("#status"),
+  windowPanel: document.querySelector("#window-workspaces"),
+  windowTrial: document.querySelector("#window-trial"),
+  enableWindows: document.querySelector("#enable-window-workspaces"),
+  windowSearch: document.querySelector("#window-search"),
+  windowList: document.querySelector("#window-list"),
+  windowDestination: document.querySelector("#window-destination"),
+  newWindowForm: document.querySelector("#new-window-workspace"),
+  windowName: document.querySelector("#window-name"),
   setup: document.querySelector("#setup"),
   setupCopy: document.querySelector("#setup-copy"),
   adopt: document.querySelector("#adopt"),
@@ -19,11 +27,14 @@ const ui = {
   workspace: document.querySelector("#workspace"),
   activeContext: document.querySelector("#active-context"),
   tabContext: document.querySelector("#tab-context"),
-  tabTitle: document.querySelector("#tab-title"),
-  tabHost: document.querySelector("#tab-host"),
+  tabLocation: document.querySelector("#tab-location"),
   readLater: document.querySelector("#read-later"),
-  readLaterCount: document.querySelector("#read-later-count"),
   settings: document.querySelector("#settings"),
+  workspaceSelect: document.querySelector("#workspace-select"),
+  workspaceName: document.querySelector("#workspace-name"),
+  workspaceContext: document.querySelector("#workspace-context"),
+  saveWorkspace: document.querySelector("#save-workspace"),
+  openWorkspace: document.querySelector("#open-workspace"),
   message: document.querySelector("#message"),
 };
 
@@ -49,9 +60,27 @@ async function load() {
 }
 
 function render() {
+  const windowMode = snapshot.mode === "windows";
+  ui.windowPanel.hidden = !windowMode;
+  ui.windowTrial.hidden = windowMode;
+  if (windowMode) {
+    ui.setup.hidden = true;
+    ui.workspace.hidden = true;
+    ui.status.hidden = false;
+    const current = snapshot.workspaces.find((item) => item.id === snapshot.currentWorkspaceId);
+    ui.status.textContent = current ? `Working in ${current.title}` : "This window is not assigned to a workspace";
+    ui.message.textContent = snapshot.browserWarning || "";
+    renderWindowList();
+    const placeholder = new Option("Move this tab…", "", true, true);
+    placeholder.disabled = true;
+    ui.windowDestination.replaceChildren(placeholder, ...snapshot.workspaces.filter((item) => item.id !== current?.id).map((item) => new Option(item.title, item.id)));
+    updateActionAvailability();
+    return;
+  }
   ui.setup.hidden = snapshot.managed;
   ui.workspace.hidden = !snapshot.managed;
-  ui.message.textContent = "";
+  ui.message.textContent = snapshot.browserWarning || "";
+  ui.status.hidden = snapshot.managed;
 
   if (!snapshot.managed) {
     document.documentElement.style.setProperty("--context", colors.grey);
@@ -71,25 +100,84 @@ function render() {
 
   const activeContext = snapshot.contexts.find((context) => context.id === snapshot.activeContextId);
   document.documentElement.style.setProperty("--context", colors[activeContext?.color] || colors.grey);
-  ui.status.textContent = "This window is managed";
-
   setContextOptions(ui.activeContext, snapshot.contexts, snapshot.activeContextId);
-  setContextOptions(
-    ui.tabContext,
-    snapshot.contexts,
-    snapshot.currentRecord?.contextId || snapshot.activeContextId,
-  );
+  const record = snapshot.currentRecord;
+  const onShelf = ["readLater", "inactive"].includes(record?.attention);
+  const placeholder = new Option("Move this tab…", "", true, true);
+  placeholder.disabled = true;
+  ui.tabContext.replaceChildren(placeholder, ...snapshot.contexts.map((context) => {
+    const option = new Option(context.title, context.id);
+    option.disabled = !onShelf && context.id === record?.contextId;
+    return option;
+  }));
 
-  ui.tabTitle.textContent = snapshot.currentTab?.title || "No active tab";
-  ui.tabHost.textContent = hostname(snapshot.currentTab?.url);
-  ui.readLaterCount.textContent = String(snapshot.readLaterCount);
+  ui.tabLocation.textContent = record?.pinned ? "Pinned everywhere · unpin to move to a bucket"
+    : onShelf ? `${record.attention === "inactive" ? "Inactive" : "Read Later"} · from ${contextTitle(record.originContextId)}`
+    : record && record.contextId !== snapshot.activeContextId ? `This tab is in ${contextTitle(record.contextId)}` : "";
+  ui.tabLocation.hidden = !ui.tabLocation.textContent;
+  ui.readLater.textContent = onShelf ? "Restore this tab"
+    : record?.pinned ? "Unpin & send to Read Later" : "Send to Read Later";
+  const selected = ui.workspaceSelect.value;
+  ui.workspaceSelect.replaceChildren(new Option("New tab set…", ""), ...snapshot.workspaces.map((workspace) => (
+    new Option(`${contextTitle(workspace.contextId)} · ${workspace.title}`, workspace.id)
+  )));
+  if (snapshot.workspaces.some((workspace) => workspace.id === selected)) ui.workspaceSelect.value = selected;
+  ui.openWorkspace.disabled = !ui.workspaceSelect.value;
+  setContextOptions(ui.workspaceContext, snapshot.contexts, ui.workspaceContext.value || snapshot.activeContextId);
+  updateActionAvailability();
+}
 
-  const onShelf = snapshot.currentRecord?.attention === "readLater";
-  ui.readLater.textContent = onShelf
-    ? `Restore tab to ${contextTitle(snapshot.currentRecord?.originContextId)}`
-    : "Send to Read Later";
-  ui.tabContext.disabled = !snapshot.currentTab;
-  ui.readLater.disabled = !snapshot.currentTab;
+function renderWindowList() {
+  const search = ui.windowSearch.value.trim().toLocaleLowerCase();
+  const workspaces = snapshot.workspaces.filter((item) => item.title.toLocaleLowerCase().includes(search));
+  ui.windowList.replaceChildren(...workspaces.map((workspace) => {
+    const row = document.createElement("div");
+    row.className = "window-workspace-row";
+    const button = document.createElement("button");
+    button.className = "window-workspace";
+    button.type = "button";
+    const title = document.createElement("strong");
+    title.textContent = workspace.title;
+    const meta = document.createElement("span");
+    const current = workspace.id === snapshot.currentWorkspaceId;
+    meta.textContent = `${workspace.restoring ? "Finish restoring" : current ? "Current" : workspace.windowId !== null ? "Live · switch" : "Resume"} · ${workspace.tabCount} saved page${workspace.tabCount === 1 ? "" : "s"}`;
+    button.append(title, meta);
+    button.disabled = current && !workspace.restoring;
+    button.dataset.current = String(button.disabled);
+    button.addEventListener("click", () => act("Switching workspace…", async () => {
+      await send("focusWindowWorkspace", { workspaceId: workspace.id });
+      window.close();
+    }));
+    row.append(button);
+    if (!snapshot.managed && workspace.windowId === null) {
+      const attach = document.createElement("button");
+      attach.className = "attach-window";
+      attach.textContent = "Use this window";
+      attach.addEventListener("click", () => {
+        if (!window.confirm(`Associate this window with “${workspace.title}”? Its current tabs will become the live workspace. The previous saved tab list is retained in your backup.`)) return;
+        act("Attaching window…", () => send("attachWorkspaceWindow", { workspaceId: workspace.id, windowId: currentWindow.id }));
+      });
+      row.append(attach);
+    }
+    return row;
+  }));
+  if (!workspaces.length) {
+    const empty = document.createElement("p");
+    empty.className = "help";
+    empty.textContent = "No matching workspaces.";
+    ui.windowList.append(empty);
+  }
+}
+
+function updateActionAvailability() {
+  if (snapshot?.mode === "windows") {
+    ui.windowDestination.disabled = !snapshot.managed || !activeTab;
+    for (const button of ui.windowList.querySelectorAll("[data-current]")) button.disabled = button.dataset.current === "true";
+    return;
+  }
+  ui.openWorkspace.disabled = !ui.workspaceSelect.value;
+  ui.tabContext.disabled = !snapshot?.currentTab || snapshot?.currentRecord?.pinned === true;
+  ui.readLater.disabled = !snapshot?.currentTab;
 }
 
 function setContextOptions(select, contexts, selected) {
@@ -106,21 +194,18 @@ function contextTitle(contextId) {
   return snapshot.contexts.find((context) => context.id === contextId)?.title || "context";
 }
 
-function hostname(url) {
-  try { return new URL(url).hostname.replace(/^www\./, ""); }
-  catch { return "Browser page"; }
-}
-
-async function act(label, task) {
+async function act(label, task, successLabel = "") {
   ui.message.textContent = label;
-  document.querySelectorAll("button, select").forEach((element) => { element.disabled = true; });
+  document.querySelectorAll("button:not(#settings), input, select").forEach((element) => { element.disabled = true; });
   try {
-    await task();
+    const result = await task();
     await load();
+    if (successLabel) ui.message.textContent = typeof successLabel === "function" ? successLabel(result) : successLabel;
   } catch (error) {
     ui.message.textContent = error.message;
   } finally {
-    document.querySelectorAll("button, select").forEach((element) => { element.disabled = false; });
+    document.querySelectorAll("button, input, select").forEach((element) => { element.disabled = false; });
+    updateActionAvailability();
   }
 }
 
@@ -139,22 +224,69 @@ ui.activeContext.addEventListener("change", () => act("Switching…", () => send
   contextId: ui.activeContext.value,
 })));
 
-ui.tabContext.addEventListener("change", () => act("Moving…", () => send("moveTabToContext", {
-  tabId: snapshot.currentTab.id,
-  contextId: ui.tabContext.value,
-})));
+ui.tabContext.addEventListener("change", () => {
+  const destination = ui.tabContext.value;
+  if (!destination) return;
+  act("Moving…", () => send("moveTabToContext", {
+    tabId: snapshot.currentTab.id,
+    contextId: destination,
+  }), `Moved to ${contextTitle(destination)}`);
+});
 
 ui.readLater.addEventListener("click", () => act("Moving…", async () => {
-  if (snapshot.currentRecord?.attention === "readLater") {
+  if (["readLater", "inactive"].includes(snapshot.currentRecord?.attention)) {
     await send("restoreReadLaterTab", { tabId: snapshot.currentTab.id });
   } else {
     await send("moveTabToReadLater", { tabId: snapshot.currentTab.id });
   }
 }));
 
+ui.workspaceSelect.addEventListener("change", () => {
+  const workspace = snapshot.workspaces.find((candidate) => candidate.id === ui.workspaceSelect.value);
+  ui.workspaceName.value = workspace?.title || "";
+  ui.workspaceContext.value = workspace?.contextId || snapshot.activeContextId;
+  ui.openWorkspace.disabled = !workspace;
+});
+
+ui.saveWorkspace.addEventListener("click", () => {
+  const workspace = snapshot.workspaces.find((candidate) => candidate.id === ui.workspaceSelect.value);
+  if (workspace && !window.confirm(`Replace “${workspace.title}” with the currently selected tabs?`)) return;
+  act("Saving workspace…", () => send("saveWorkspace", { workspace: {
+    id: workspace?.id,
+    title: ui.workspaceName.value,
+    contextId: ui.workspaceContext.value,
+  } }), (result) => `Saved ${result.saved} selected pages`);
+});
+
+ui.openWorkspace.addEventListener("click", () => act("Opening workspace…", () => send("openWorkspace", {
+  workspaceId: ui.workspaceSelect.value,
+}), (result) => `Opened ${result.opened} missing pages`));
+
+ui.enableWindows.addEventListener("click", () => {
+  if (!window.confirm("Move this window’s grouped tabs into separate workspace windows? Tabs stay open and an original-state backup is kept. Automatic shelving and group accordion behavior will be disabled in window mode.")) return;
+  act("Creating workspace windows…", () => send("enableWindowWorkspaces", { windowId: currentWindow.id }));
+});
+ui.windowSearch.addEventListener("input", renderWindowList);
+ui.windowDestination.addEventListener("change", () => {
+  if (!ui.windowDestination.value || !activeTab) return;
+  act("Filing tab in the background…", () => send("moveWindowTab", { tabId: activeTab.id, workspaceId: ui.windowDestination.value }), "Tab filed; you stayed in this workspace");
+});
+ui.newWindowForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  act("Creating workspace…", async () => {
+    await send("createWindowWorkspace", { title: ui.windowName.value });
+    ui.windowName.value = "";
+    window.close();
+  });
+});
+
 ui.settings.addEventListener("click", async () => {
-  await send("openOptions");
-  window.close();
+  try {
+    await chrome.runtime.openOptionsPage();
+    window.close();
+  } catch (error) {
+    ui.message.textContent = error.message;
+  }
 });
 
 load().catch((error) => {

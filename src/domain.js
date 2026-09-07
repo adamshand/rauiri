@@ -1,6 +1,8 @@
 export const READ_LATER_ID = "read-later";
 export const READ_LATER_TITLE = "Read Later";
-export const STATE_VERSION = 4;
+export const INACTIVE_ID = "inactive";
+export const INACTIVE_TITLE = "Inactive";
+export const STATE_VERSION = 5;
 export const BACKUP_FORMAT = "rauiri-backup";
 export const BACKUP_FORMAT_VERSION = 1;
 export const TAB_GROUP_COLORS = Object.freeze([
@@ -26,6 +28,7 @@ export function createInitialState() {
     contexts: DEFAULT_CONTEXTS.map((context) => ({ ...context })),
     routes: [],
     records: {},
+    workspaces: [],
     settings: { ...DEFAULT_SETTINGS },
   };
 }
@@ -34,7 +37,7 @@ export function migrateState(value) {
   const initial = createInitialState();
   if (!value || typeof value !== "object") return initial;
 
-  const contexts = Array.isArray(value.contexts) && value.contexts.length
+  let contexts = Array.isArray(value.contexts) && value.contexts.length
     ? value.contexts
         .filter((context) => context && context.id && context.title)
         .map((context, index) => ({
@@ -45,6 +48,7 @@ export function migrateState(value) {
         }))
         .sort((a, b) => a.order - b.order)
     : initial.contexts;
+  if (!contexts.length) contexts = initial.contexts;
 
   const activeContextId = contexts.some((context) => context.id === value.activeContextId)
     ? value.activeContextId
@@ -73,6 +77,7 @@ export function migrateState(value) {
     activeContextId,
     contexts,
     routes: Array.isArray(value.routes) ? value.routes : [],
+    workspaces: Array.isArray(value.workspaces) ? value.workspaces : [],
     records,
     settings,
   };
@@ -91,6 +96,7 @@ export function createBackup(state, { extensionVersion, exportedAt = new Date().
       contexts: current.contexts,
       routes: current.routes,
       records: current.records,
+      workspaces: current.workspaces,
       settings: current.settings,
     },
   };
@@ -106,6 +112,42 @@ export function stateFromBackup(backup, { managedWindowId = null } = {}) {
     throw new Error("The backup does not contain any contexts.");
   }
 
+  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const safeId = (value) => typeof value === "string" && value.length > 0
+    && !["__proto__", "constructor", "prototype"].includes(value);
+  if (!Number.isInteger(source.version) || source.version < 1 || source.version > STATE_VERSION) {
+    throw new Error("The backup uses an unsupported state version.");
+  }
+  if (!source.contexts.every((context) => object(context) && safeId(context.id)
+    && ![READ_LATER_ID, INACTIVE_ID].includes(context.id) && typeof context.title === "string" && context.title.trim()
+    && ![READ_LATER_TITLE, INACTIVE_TITLE].some((title) => title.toLowerCase() === context.title.trim().toLowerCase())
+    && TAB_GROUP_COLORS.includes(context.color))) {
+    throw new Error("The backup contains an invalid or reserved context.");
+  }
+  if (!Array.isArray(source.routes) || !object(source.records) || !object(source.settings)) {
+    throw new Error("The backup is missing routes, records, or lifecycle settings.");
+  }
+  if (!source.routes.every((route) => object(route) && safeId(route.id) && typeof route.hostname === "string")) {
+    throw new Error("The backup contains an invalid routing rule.");
+  }
+  if (!Object.entries(source.records).every(([id, record]) => object(record) && safeId(id)
+    && record.id === id && typeof record.url === "string"
+    && ["current", "readLater", "inactive"].includes(record.attention)
+    && (record.title === undefined || typeof record.title === "string")
+    && (record.pinned === undefined || typeof record.pinned === "boolean")
+    && (record.pinScope === undefined || ["none", "context", "global"].includes(record.pinScope))
+    && (record.lastSeenAt === undefined || Number.isFinite(record.lastSeenAt)))) {
+    throw new Error("The backup contains an invalid saved tab record.");
+  }
+  for (const key of ["archiveAfterHours", "discardReadLaterAfterHours"]) {
+    if (!Number.isFinite(source.settings[key]) || source.settings[key] < 1) {
+      throw new Error("The backup contains invalid lifecycle settings.");
+    }
+  }
+
+  if (source.workspaces !== undefined && !Array.isArray(source.workspaces)) {
+    throw new Error("The backup contains invalid workspaces.");
+  }
   const restored = migrateState(source);
   const contextIds = new Set(restored.contexts.map((context) => context.id));
   const contextTitles = new Set(restored.contexts.map((context) => context.title.toLowerCase()));
@@ -114,6 +156,14 @@ export function stateFromBackup(backup, { managedWindowId = null } = {}) {
   }
   if (!restored.contexts.every((context) => TAB_GROUP_COLORS.includes(context.color))) {
     throw new Error("The backup contains an invalid context colour.");
+  }
+
+  if (!restored.workspaces.every((workspace) => object(workspace) && safeId(workspace.id)
+    && typeof workspace.title === "string" && workspace.title.trim() && contextIds.has(workspace.contextId)
+    && Array.isArray(workspace.pages) && workspace.pages.every((page) => object(page)
+      && typeof page.url === "string" && isRoutableUrl(page.url) && typeof page.title === "string"))
+    || new Set(restored.workspaces.map((workspace) => workspace.id)).size !== restored.workspaces.length) {
+    throw new Error("The backup contains invalid workspaces.");
   }
 
   const routeIds = new Set(restored.routes.map((route) => route?.id));
@@ -126,6 +176,7 @@ export function stateFromBackup(backup, { managedWindowId = null } = {}) {
 
   const validRecords = Object.entries(restored.records).every(([id, record]) => (
     record && record.id === id && contextIds.has(record.contextId) && typeof record.url === "string"
+    && (record.originContextId === undefined || contextIds.has(record.originContextId))
   ));
   if (!validRecords) {
     throw new Error("The backup contains an invalid saved tab record.");
@@ -206,15 +257,17 @@ export function attentionForNewTab(openerRecord) {
 }
 
 export function groupKeyForRecord(record) {
-  return record?.attention === "readLater" ? READ_LATER_ID : record?.contextId || null;
+  if (record?.attention === "readLater") return READ_LATER_ID;
+  if (record?.attention === "inactive") return INACTIVE_ID;
+  return record?.contextId || null;
 }
 
 export function assignRecordToGroup(record, { groupKey, route, url }) {
   if (!record || !groupKey || groupKeyForRecord(record) === groupKey) return false;
 
-  if (groupKey === READ_LATER_ID) {
+  if ([READ_LATER_ID, INACTIVE_ID].includes(groupKey)) {
     record.originContextId = record.contextId;
-    record.attention = "readLater";
+    record.attention = groupKey === READ_LATER_ID ? "readLater" : "inactive";
     record.pinned = false;
     record.routeSuppressedHostname = null;
     return true;
@@ -228,7 +281,7 @@ export function assignRecordToGroup(record, { groupKey, route, url }) {
 }
 
 export function shouldArchiveTab({ tab, record, route, now, archiveAfterHours }) {
-  if (!tab || !record || record.attention === "readLater") return false;
+  if (!tab || !record || record.attention !== "current") return false;
   if (tab.active || tab.audible || tab.pinned) return false;
   if (record.pinned) return false;
   if (route) return false;
@@ -236,8 +289,8 @@ export function shouldArchiveTab({ tab, record, route, now, archiveAfterHours })
   return now - tab.lastAccessed >= hours(archiveAfterHours);
 }
 
-export function shouldDiscardReadLater({ tab, record, now, discardAfterHours }) {
-  if (!tab || !record || record.attention !== "readLater") return false;
+export function shouldDiscardShelvedTab({ tab, record, now, discardAfterHours }) {
+  if (!tab || !record || !["readLater", "inactive"].includes(record.attention)) return false;
   if (tab.active || tab.audible || tab.discarded) return false;
   if (!Number.isFinite(tab.lastAccessed)) return false;
   return now - tab.lastAccessed >= hours(discardAfterHours);
