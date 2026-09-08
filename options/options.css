@@ -6,6 +6,7 @@
   --surface: #fbfaf7;
   --line: #d8d4ca;
   --accent: #668c69;
+  font-size: 18px;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -14,7 +15,7 @@
 body { margin: 0; color: var(--ink); background: var(--paper); }
 
 main {
-  width: min(920px, calc(100% - 48px));
+  width: min(1100px, calc(100% - 48px));
   margin: 0 auto;
   padding: 70px 0 40px;
 }
@@ -30,7 +31,7 @@ header {
 
 .eyebrow {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: .14em;
   text-transform: uppercase;
@@ -57,13 +58,13 @@ header p {
   width: 260px;
   margin: 0 0 5px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 18px;
   line-height: 1.5;
 }
 
 section {
   display: grid;
-  grid-template-columns: 235px 1fr;
+  grid-template-columns: 235px minmax(0, 1fr);
   gap: 55px;
   padding: 42px 0 46px;
   border-bottom: 1px solid var(--line);
@@ -77,7 +78,7 @@ h2 {
 .section-copy p {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 18px;
   line-height: 1.55;
 }
 
@@ -94,7 +95,7 @@ h2 {
 }
 
 .context-row.workspace-context { grid-template-columns: 24px 25px minmax(170px, 1fr) 130px; }
-.workspace-slot { color: var(--muted); font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+.workspace-slot { color: var(--muted); font: 600 18px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
 
 .order-buttons { display: grid; gap: 1px; }
 .order-buttons button {
@@ -102,18 +103,19 @@ h2 {
   padding: 0;
   color: #9a968e;
   background: transparent;
-  font-size: 10px;
+  font-size: 18px;
 }
 .order-buttons button:hover { color: var(--ink); }
 .order-buttons button:disabled { visibility: hidden; }
 
 input, select {
-  height: 38px;
+  height: 44px;
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--ink);
   background: var(--surface);
-  font: 600 13px/1 inherit;
+  font: inherit;
+  font-weight: 600;
   outline: none;
 }
 
@@ -122,10 +124,11 @@ select { padding: 0 28px 0 10px; }
 input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(102 140 105 / 13%); }
 
 button {
-  min-height: 37px;
+  min-height: 44px;
   border: 0;
   border-radius: 6px;
-  font: 750 12px/1 inherit;
+  font: inherit;
+  font-weight: 750;
   cursor: pointer;
   transition: transform 100ms ease, background-color 140ms ease;
 }
@@ -141,6 +144,7 @@ button:disabled { cursor: wait; opacity: .5; }
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
   margin-top: 17px;
@@ -158,7 +162,7 @@ label > span {
   display: block;
   margin-bottom: 7px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -177,8 +181,8 @@ label > span {
 .checkbox span { margin: 0; letter-spacing: 0; text-transform: none; }
 
 .route-list { margin-top: 6px; }
-.workspace-row { display: flex; align-items: center; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
-.workspace-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.workspace-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.workspace-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 18px; }
 .backup-body .checkbox { margin: 16px 0 10px; }
 .route-row {
   display: grid;
@@ -187,13 +191,13 @@ label > span {
   align-items: center;
   min-height: 49px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 18px;
 }
 .route-destination { display: grid; gap: 4px; padding: 8px 0; min-width: 0; }
 .route-destination select { width: 100%; min-width: 0; }
-.route-row code { overflow-wrap: anywhere; color: var(--ink); font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.route-row span { color: var(--muted); font-size: 12px; }
-.empty { padding: 18px 0; color: var(--muted); font-size: 12px; }
+.route-row code { overflow-wrap: anywhere; color: var(--ink); font: 600 18px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.route-row span { color: var(--muted); font-size: 18px; }
+.empty { padding: 18px 0; color: var(--muted); font-size: 18px; }
 
 .recovery-heading {
   display: flex;
@@ -203,7 +207,7 @@ label > span {
   padding-bottom: 9px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 18px;
 }
 .text-button {
   min-height: auto;
@@ -228,7 +232,7 @@ label > span {
   display: block;
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -239,11 +243,11 @@ label > span {
   overflow: hidden;
   margin-top: 3px;
   color: var(--muted);
-  font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 18px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.recovery-meta { color: var(--muted); font-size: 10px; line-height: 1.5; text-align: right; }
+.recovery-meta { color: var(--muted); font-size: 18px; line-height: 1.5; text-align: right; }
 .recovery-meta strong { display: block; color: var(--ink); font-weight: 700; }
 .recovery-actions > div { display: flex; gap: 8px; }
 
@@ -251,7 +255,7 @@ label > span {
   max-width: 540px;
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 18px;
   line-height: 1.6;
 }
 .backup-body .actions { justify-content: flex-end; }
@@ -265,7 +269,7 @@ label > span {
   border-bottom: 1px solid var(--line);
 }
 .lifecycle label > span { margin: 0; color: var(--ink); letter-spacing: 0; text-transform: none; }
-.lifecycle label div { color: var(--muted); font-size: 12px; text-align: right; }
+.lifecycle label div { color: var(--muted); font-size: 18px; text-align: right; }
 .lifecycle input { width: 72px; margin-right: 7px; }
 
 footer {
@@ -273,7 +277,7 @@ footer {
   justify-content: space-between;
   padding-top: 18px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 18px;
 }
 #status { color: var(--ink); }
 
@@ -282,7 +286,7 @@ footer {
   to { opacity: 1; transform: translateY(0); }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 950px) {
   main { width: min(100% - 30px, 600px); padding-top: 35px; }
   header { align-items: start; flex-direction: column; gap: 18px; }
   .settings-icon { width: 52px; height: 52px; border-radius: 13px; }
