@@ -205,13 +205,13 @@ function renderWorkspaces() {
       const keepLabel = makeElement("label", "checkbox");
       const keep = document.createElement("input");
       keep.type = "checkbox";
-      keep.checked = workspace.keepAvailable;
-      keep.setAttribute("aria-label", `Keep ${workspace.title} available`);
+      keep.checked = workspace.pinned;
+      keep.setAttribute("aria-label", `Pin ${workspace.title} alongside other workspaces`);
       keep.addEventListener("change", () => perform("Saving window preference…", async () => {
-        await send("setWorkspaceAvailability", { workspaceId: workspace.id, keepAvailable: keep.checked });
+        await send("setPinnedWorkspace", { workspaceId: keep.checked ? workspace.id : null });
         await refreshSnapshot();
       }));
-      keepLabel.append(keep, makeElement("span", "", "Keep available"));
+      keepLabel.append(keep, makeElement("span", "", "Pinned"));
       row.append(label, keepLabel, open);
       return row;
     }));

@@ -27,7 +27,14 @@ export function validateWindowState(value) {
       || typeof route.activate !== "boolean") throw new Error("Invalid workspace route.");
     routeIds.add(route.id);
   }
-  return structuredClone({ ...value, enabled: true });
+  // Older backups allowed multiple minimisation exemptions. Keep the first in
+  // shortcut order as the single pin; an explicit null means no pin.
+  const pinnedWorkspaceId = value.pinnedWorkspaceId === undefined
+    ? value.workspaces.find((workspace) => workspace.keepAvailable)?.id || null
+    : value.pinnedWorkspaceId;
+  if (pinnedWorkspaceId !== null && !ids.has(pinnedWorkspaceId)) throw new Error("Invalid pinned workspace.");
+  return structuredClone({ ...value, enabled: true, pinnedWorkspaceId,
+    workspaces: value.workspaces.map(({ keepAvailable, ...workspace }) => workspace) });
 }
 
 // One owner for window/tab mutations. Reads never wait for this queue.
@@ -53,7 +60,9 @@ export function createWindowWorkspaces(api) {
   void ready.catch((error) => { warning = error.message; });
 
   const enabled = () => data?.enabled === true;
-  const workspaceForWindow = (windowId) => data?.workspaces.find((workspace) => bindings.get(workspace.id) === windowId);
+  const workspaceForWindow = (windowId) => Number.isInteger(windowId)
+    ? data?.workspaces.find((workspace) => bindings.get(workspace.id) === windowId)
+    : undefined;
   const find = (id) => {
     const workspace = data?.workspaces.find((item) => item.id === id);
     if (!workspace) throw new Error("Choose a workspace.");
@@ -215,14 +224,17 @@ export function createWindowWorkspaces(api) {
     const window = await normalWindow(windowId);
     await edit(() => api.windows.update(windowId, { ...(window.state === "minimized" ? { state: "normal" } : {}), focused: true }));
     await rememberFocus(id);
+    await minimizeOtherWindows(id);
+    await captureAll();
+  }
+  async function minimizeOtherWindows(id) {
     if (data.minimizeOthers) {
       for (const [otherId, otherWindowId] of bindings) {
-        if (otherId === id || find(otherId).keepAvailable) continue;
+        if (otherId === id || otherId === data.pinnedWorkspaceId) continue;
         try { await edit(() => api.windows.update(otherWindowId, { state: "minimized" })); }
         catch (error) { warning = error.message; }
       }
     }
-    await captureAll();
   }
   async function moveTab(tabId, destinationId, follow = false, manual = true) {
     const tab = await api.tabs.get(tabId);
@@ -322,8 +334,8 @@ export function createWindowWorkspaces(api) {
   function overview(windowId) {
     return {
       mode: "windows", managed: Boolean(workspaceForWindow(windowId)), currentWorkspaceId: workspaceForWindow(windowId)?.id || null,
-      browserWarning: warning, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent],
-      workspaces: data.workspaces.map((workspace) => ({ id: workspace.id, title: workspace.title, color: workspace.color, windowId: bindings.get(workspace.id) ?? null, restoring: workspace.restorePending === true, keepAvailable: workspace.keepAvailable === true, tabCount: workspace.tabs.length })),
+      browserWarning: warning, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent], pinnedWorkspaceId: data.pinnedWorkspaceId,
+      workspaces: data.workspaces.map((workspace) => ({ id: workspace.id, title: workspace.title, color: workspace.color, windowId: bindings.get(workspace.id) ?? null, restoring: workspace.restorePending === true, pinned: workspace.id === data.pinnedWorkspaceId, tabCount: workspace.tabs.length })),
       contexts: data.workspaces.map(({ id, title, color }, order) => ({ id, title, color, order })),
       routes: data.routes, settings: {}, hasManagedWindow: bindings.size > 0, managedWindowId: null,
     };
@@ -334,7 +346,7 @@ export function createWindowWorkspaces(api) {
     if (message.type === "exportBackup") {
       const legacy = await api.storage.local.get("rauiriState");
       return { format: FORMAT, formatVersion: 1, exportedAt: new Date().toISOString(),
-        state: message.configurationOnly ? { ...data, workspaces: data.workspaces.map(({ id, title, color, keepAvailable }) => ({ id, title, color, keepAvailable: keepAvailable === true, tabs: [] })) } : data,
+        state: message.configurationOnly ? { ...data, workspaces: data.workspaces.map(({ id, title, color }) => ({ id, title, color, tabs: [] })) } : data,
         ...(message.configurationOnly ? {} : { legacyState: legacy.rauiriState }) };
     }
     if (message.type === "exportLegacyBackup") {
@@ -369,10 +381,19 @@ export function createWindowWorkspaces(api) {
           await captureAll();
           break;
         }
-        case "setWorkspaceAvailability":
-          find(message.workspaceId).keepAvailable = message.keepAvailable === true;
+        case "setPinnedWorkspace": {
+          if (message.workspaceId !== null) find(message.workspaceId);
+          data.pinnedWorkspaceId = message.workspaceId;
           await persist();
+          if (message.workspaceId !== null) {
+            await focus(message.workspaceId);
+          } else {
+            const window = await api.windows.getLastFocused({ windowTypes: ["normal"] });
+            const current = workspaceForWindow(window.id);
+            if (current) await minimizeOtherWindows(current.id);
+          }
           break;
+        }
         case "setWorkspacePreferences": data.minimizeOthers = message.minimizeOthers === true; await persist(); break;
         case "saveContexts": {
           if (!Array.isArray(message.contexts) || message.contexts.length !== data.workspaces.length) throw new Error("Create workspaces in the popup. Removing workspaces is not supported in this live prototype.");

@@ -158,7 +158,18 @@ function renderWindowList() {
       await send("focusWindowWorkspace", { workspaceId: workspace.id });
       window.close();
     }));
-    row.append(button);
+    const pin = document.createElement("button");
+    pin.className = "workspace-pin";
+    pin.type = "button";
+    pin.setAttribute("aria-label", `Keep ${workspace.title} alongside other workspaces`);
+    pin.setAttribute("aria-pressed", String(workspace.pinned));
+    pin.title = workspace.pinned ? `Unpin ${workspace.title}` : `Pin and switch to ${workspace.title}`;
+    pin.innerHTML = '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h8l-1 7 4 4v2H5v-2l4-4-1-7Z"/><path d="M12 16v5"/></svg>';
+    pin.addEventListener("click", () => act(workspace.pinned ? "Unpinning workspace…" : "Pinning workspace…", async () => {
+      await send("setPinnedWorkspace", { workspaceId: workspace.pinned ? null : workspace.id });
+      if (!workspace.pinned) window.close();
+    }, "Workspace unpinned"));
+    row.append(button, pin);
     if (!snapshot.managed && workspace.windowId === null) {
       const attach = document.createElement("button");
       attach.className = "attach-window";

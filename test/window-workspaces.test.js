@@ -271,18 +271,65 @@ test("changing a saved route destination preserves its identity and behavior wit
   assert.equal(app.tabs.get(1).windowId, 10);
 });
 
-test("keep-available exempts only the chosen workspace and survives configuration export", async () => {
+test("the single workspace pin survives export and clearing it minimises the inactive window", async () => {
   const app = await enabled();
-  await app.controller.handle({ type: "setWorkspaceAvailability", workspaceId: "personal", keepAvailable: true });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
   await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
   assert.equal(app.windows.get(1).state, "normal");
   const backup = await app.controller.handle({ type: "exportBackup", configurationOnly: true });
-  assert.equal(validateWindowState(backup.state).workspaces[0].keepAvailable, true);
-  await app.controller.handle({ type: "setWorkspaceAvailability", workspaceId: "personal", keepAvailable: false });
-  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  assert.equal(validateWindowState(backup.state).pinnedWorkspaceId, "personal");
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: null });
   assert.equal(app.windows.get(1).state, "minimized");
-  backup.state.workspaces[0].keepAvailable = "yes";
-  assert.throws(() => validateWindowState(backup.state), /Invalid workspace/);
+  assert.equal(app.windows.get(10).focused, true);
+  assert.equal(app.local.rauiriWindowWorkspaces.pinnedWorkspaceId, null);
+  backup.state.pinnedWorkspaceId = "missing";
+  assert.throws(() => validateWindowState(backup.state), /Invalid pinned workspace/);
+});
+
+test("swapping the pin focuses the new base, minimises the old one and keeps shortcuts and tabs intact", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  const view = await app.controller.handle({ type: "snapshot", windowId: 10 });
+  assert.deepEqual(view.workspaces.filter((w) => w.pinned).map((w) => w.id), ["work"]);
+  assert.equal(view.workspaces[0].id, "personal");
+  assert.equal(app.windows.get(1).state, "minimized");
+  assert.equal(app.windows.get(10).focused, true);
+  assert.equal(app.tabs.get(3).pinned, true, "native tab pins are independent");
+  assert.equal(app.calls.some(([method]) => method === "tab.move" || method === "tab.create" || method === "window.create"), false);
+  await assert.rejects(app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "missing" }), /Choose a workspace/);
+  assert.equal(app.local.rauiriWindowWorkspaces.pinnedWorkspaceId, "work");
+});
+
+test("snapshots without a window do not mistake a closed workspace for the current one", async () => {
+  const app = await enabled();
+  const view = await app.controller.handle({ type: "configurationSnapshot" });
+  assert.equal(view.currentWorkspaceId, null);
+  assert.equal(view.managed, false);
+});
+
+test("pinning respects disabled minimisation", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setWorkspacePreferences", minimizeOthers: false });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  assert.equal(app.windows.get(1).state, "normal");
+  assert.equal(app.windows.get(10).focused, true);
+});
+
+test("legacy keep-available preferences migrate to one pin in stable workspace order", async () => {
+  const app = await enabled();
+  const state = structuredClone(app.local.rauiriWindowWorkspaces);
+  delete state.pinnedWorkspaceId;
+  state.workspaces[0].keepAvailable = true;
+  state.workspaces[1].keepAvailable = true;
+  const migrated = validateWindowState(state);
+  assert.equal(migrated.pinnedWorkspaceId, "personal");
+  assert.equal(migrated.workspaces.some((w) => "keepAvailable" in w), false);
+  state.pinnedWorkspaceId = null;
+  assert.equal(validateWindowState(state).pinnedWorkspaceId, null);
+  state.workspaces[0].keepAvailable = "yes";
+  assert.throws(() => validateWindowState(state), /Invalid workspace/);
 });
 
 test("previous-workspace toggles and numbered shortcuts use stable order, not recency", async () => {

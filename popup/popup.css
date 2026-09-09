@@ -61,13 +61,17 @@ select { padding-right: 25px; }
 #message { margin: 14px 0 0; padding: 10px 12px; border-radius: 7px; background: #e9ece2; line-height: 1.5; font-size: 18px; overflow-wrap: anywhere; }
 #message:empty { display: none; }
 .window-list { max-height: 310px; overflow-y: auto; margin: 8px 0 16px; }
-.window-workspace-row { border-bottom: 1px solid var(--line); padding: 3px 0; }
+.window-workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); padding: 3px 0; }
 .window-workspace { width: 100%; display: grid; gap: 4px; text-align: left; background: transparent; padding: 10px; }
 .window-workspace strong { overflow-wrap: anywhere; font-weight: 600; }
 .window-workspace span { font-size: 18px; font-weight: 400; color: var(--muted); }
 .window-workspace:hover { background: #e7ebdf; }
 .window-workspace[data-current="true"] { opacity: 1; background: #e7ebdf; cursor: default; }
-.attach-window { background: transparent; color: var(--muted); font-size: 18px; }
+.workspace-pin { display: grid; place-items: center; padding: 8px; color: var(--muted); background: transparent; }
+.workspace-pin:hover { background: #e7ebdf; }
+.workspace-pin[aria-pressed="true"] { color: var(--ink); background: #dce5d5; }
+.workspace-pin[aria-pressed="true"] svg { fill: currentColor; }
+.attach-window { grid-column: 1 / -1; background: transparent; color: var(--muted); font-size: 18px; }
 .window-move { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 #new-window-workspace { padding-top: 10px; }
 #window-trial { margin-bottom: 15px; }
