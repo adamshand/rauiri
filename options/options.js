@@ -85,8 +85,8 @@ function render() {
     ? "Live workspaces remember their tabs automatically. Switch without reloading, or resume a closed workspace from its saved URLs."
     : "Save selected tabs from the popup for a client or task. Opening adds missing pages without closing tabs.";
   ui.routeForm.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Address-bar navigation follows you to the matching workspace. Other navigation files quietly unless you enable following. Cleanup moves always stay in the background; native pins are never automatically routed."
-    : "Use exact hostnames or *.example.com for subdomains. Routed sites stay out of automatic shelving.";
+    ? "Hostnames include all subdomains; the most specific hostname wins. Address-bar navigation follows you to the matching workspace. Other navigation files quietly unless you enable following. Cleanup moves always stay in the background; native pins are never automatically routed."
+    : "Hostnames include all subdomains; the most specific hostname wins. Routed sites stay out of automatic shelving.";
   ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspace names & order" : "Contexts";
   ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
     ? "This order fixes workspace shortcuts 1–9 and 0 (tenth). Recent use only changes the popup display order. Create new workspaces in the popup."

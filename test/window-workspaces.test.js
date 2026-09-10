@@ -361,6 +361,164 @@ test("native window switching updates recent workspaces but unrelated windows do
   assert.deepEqual((await app.controller.handle({ type: "snapshot" })).recentWorkspaceIds.slice(0, 2), ["work", "personal"]);
 });
 
+test("project switches copy the outgoing normal window geometry, including negative monitor coordinates", async () => {
+  const app = await enabled();
+  const bounds = { left: -1200, top: 40, width: 1100, height: 850 };
+  Object.assign(app.windows.get(1), bounds);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(10)[key], value);
+  const updates = app.calls.filter(([method, id]) => method === "window.update" && id === 10);
+  assert.equal(updates[0][2].state, "normal", "restore minimised target before setting bounds");
+  assert.equal(updates[1][2].width, 1100);
+});
+
+test("switching from the pinned base uses the last project geometry without moving the base", async () => {
+  const app = await enabled();
+  const baseBounds = { left: 20, top: 20, width: 650, height: 700 };
+  const projectBounds = { left: 700, top: 40, width: 1100, height: 900 };
+  Object.assign(app.windows.get(1), baseBounds);
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  Object.assign(app.windows.get(10), projectBounds);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  for (const [key, value] of Object.entries(baseBounds)) assert.equal(app.windows.get(1)[key], value);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "groundtruth" });
+  const target = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "groundtruth").windowId;
+  for (const [key, value] of Object.entries(projectBounds)) assert.equal(app.windows.get(target)[key], value);
+});
+
+test("Personal inherits the project space when Work is newly pinned, even after worker restart", async () => {
+  const app = await enabled();
+  Object.assign(app.windows.get(1), { left: 0, top: 0, width: 600, height: 700 });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  const bounds = { left: 650, top: 40, width: 1200, height: 900 };
+  Object.assign(app.windows.get(10), bounds);
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  assert.equal(app.windows.get(1).state, "minimized");
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  await restarted.start();
+  await restarted.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(1)[key], value);
+  assert.equal(app.windows.get(10).state, "normal");
+});
+
+test("pinned-window resizing does not replace remembered project geometry", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  const bounds = { left: 650, top: 40, width: 1200, height: 900 };
+  Object.assign(app.windows.get(1), bounds);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  await app.api.windows.update(1, { state: "minimized" });
+  Object.assign(app.windows.get(10), { left: 0, top: 0, width: 500, height: 600 });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(1)[key], value);
+});
+
+test("special window states do not participate in geometry copying", async () => {
+  for (const state of ["maximized", "fullscreen"]) {
+    for (const specialId of [1, 10]) {
+      const app = await enabled();
+      Object.assign(app.windows.get(1), { left: 10, top: 20, width: 900, height: 800 });
+      app.windows.get(specialId).state = state;
+      await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+      assert.equal(app.calls.some(([method, , props]) => method === "window.update" && props.width !== undefined), false);
+      if (specialId === 10) assert.equal(app.windows.get(10).state, state);
+    }
+  }
+});
+
+test("failed resizing does not prevent focusing the destination", async () => {
+  const app = await enabled();
+  Object.assign(app.windows.get(1), { left: 10, top: 20, width: 900, height: 800 });
+  const update = app.api.windows.update;
+  app.api.windows.update = async (id, props) => {
+    if (props.width) throw new Error("Cannot resize window");
+    return update(id, props);
+  };
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  assert.equal(app.windows.get(10).focused, true);
+});
+
+test("native focus changes never resize windows", async () => {
+  const app = await enabled();
+  Object.assign(app.windows.get(1), { left: 10, top: 20, width: 900, height: 800 });
+  await app.api.windows.update(10, { state: "normal", focused: true });
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  assert.equal(app.calls.some(([method, , props]) => method === "window.update" && props.width !== undefined), false);
+});
+
+test("manually restoring a workspace minimises the old project and keeps the pinned base", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "groundtruth" });
+  const projectWindow = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "groundtruth").windowId;
+  await app.api.windows.update(10, { state: "normal", focused: true });
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  assert.equal(app.windows.get(1).state, "normal");
+  assert.equal(app.windows.get(10).state, "normal");
+  assert.equal(app.windows.get(projectWindow).state, "minimized");
+  assert.equal(app.windows.get(10).focused, true);
+  app.calls.length = 0;
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  assert.equal(app.calls.length, 0, "duplicate focus events must not cause repeated edits");
+});
+
+test("visiting the pinned base manually or through Rauiri preserves the visible project", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  await app.api.windows.update(1, { focused: true });
+  app.api.windows.onFocusChanged.emit(1);
+  await app.barrier();
+  assert.equal(app.windows.get(10).state, "normal");
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  assert.equal(app.windows.get(10).state, "normal");
+  await app.api.windows.update(10, { state: "minimized" });
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  assert.equal(app.windows.get(10).state, "minimized", "do not undo a manual minimisation");
+});
+
+test("stale and unrelated native focus events do not minimise windows", async () => {
+  const app = await enabled();
+  await app.api.windows.update(10, { state: "normal", focused: true });
+  app.calls.length = 0;
+  app.api.windows.onFocusChanged.emit(1);
+  app.api.windows.onFocusChanged.emit(-1);
+  app.api.windows.onFocusChanged.emit(999);
+  await app.barrier();
+  assert.equal(app.calls.length, 0);
+});
+
+test("native reconciliation stops if focus changes while browser reads are pending", async () => {
+  const app = await enabled();
+  await app.api.windows.update(10, { state: "normal", focused: true });
+  let reads = 0;
+  app.api.windows.getLastFocused = async () => {
+    if (++reads === 1) return { id: 10, focused: true };
+    return { id: 1, focused: true };
+  };
+  app.calls.length = 0;
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.windows.get(1).state, "normal");
+});
+
+test("native switching respects disabled minimisation", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setWorkspacePreferences", minimizeOthers: false });
+  await app.api.windows.update(10, { state: "normal", focused: true });
+  app.api.windows.onFocusChanged.emit(10);
+  await app.barrier();
+  assert.equal(app.windows.get(1).state, "normal");
+});
+
 test("address-bar navigation waits for intent then follows; duplicate completion does not route twice", async () => {
   const app = await enabled();
   await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work" });

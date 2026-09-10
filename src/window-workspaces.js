@@ -3,6 +3,7 @@ import { cleanHostnameInput, isRoutableUrl, isValidRouteHostname, routeForUrl, T
 const KEY = "rauiriWindowWorkspaces";
 const SESSION_KEY = "rauiriWorkspaceWindows";
 const RECENT_KEY = "rauiriRecentWorkspaces";
+const PROJECT_BOUNDS_KEY = "rauiriProjectBounds";
 const FORMAT = "rauiri-window-workspaces";
 
 export function validateWindowState(value) {
@@ -50,6 +51,7 @@ export function createWindowWorkspaces(api) {
   const moves = new Map(); // tab id -> expected destination window
   const seeds = new Map(); // blank tabs created by us for a restore
   let timer;
+  let projectBounds = null;
   let recent = []; // Most recently focused first; separate from stable shortcut order.
 
   const ready = (async () => {
@@ -139,6 +141,7 @@ export function createWindowWorkspaces(api) {
     await api.storage.session.set({ [RECENT_KEY]: recent });
   }
   async function start() {
+    projectBounds = windowBounds((await api.storage.session.get(PROJECT_BOUNDS_KEY))[PROJECT_BOUNDS_KEY]);
     const storedRecent = (await api.storage.session.get(RECENT_KEY))[RECENT_KEY];
     recent = Array.isArray(storedRecent) ? [...new Set(storedRecent)].filter((id) => data.workspaces.some((w) => w.id === id)) : [];
     const session = await api.storage.session.get(SESSION_KEY);
@@ -218,22 +221,87 @@ export function createWindowWorkspaces(api) {
     seeds.delete(workspace.id);
     await persist();
   }
-  async function focus(id) {
+  function windowBounds(window) {
+    const { left, top, width, height } = window || {};
+    if (![left, top, width, height].every(Number.isInteger) || width <= 0 || height <= 0) return null;
+    return { left, top, width, height };
+  }
+  async function rememberProjectBounds(window) {
+    const workspace = workspaceForWindow(window.id);
+    const bounds = windowBounds(window);
+    if (!workspace || workspace.id === data.pinnedWorkspaceId || window.state !== "normal" || !bounds) return;
+    projectBounds = bounds;
+    await api.storage.session.set({ [PROJECT_BOUNDS_KEY]: bounds });
+  }
+  async function replacementBounds(id) {
+    const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
+    const source = workspaceForWindow(current.id);
+    if (!source) return null;
+    await rememberProjectBounds(current);
+    if (id === data.pinnedWorkspaceId || source.id === id) return null;
+    if (source.id !== data.pinnedWorkspaceId) return current.state === "normal" ? windowBounds(current) : null;
+    for (const candidate of recent) {
+      if (candidate === data.pinnedWorkspaceId || !bindings.has(candidate)) continue;
+      let window;
+      try { window = await normalWindow(bindings.get(candidate)); }
+      catch { continue; }
+      if (window.state === "minimized") continue;
+      if (window.state !== "normal") return null;
+      // An already-visible destination should keep its current geometry.
+      if (candidate === id) return null;
+      await rememberProjectBounds(window);
+      return windowBounds(window);
+    }
+    return projectBounds;
+  }
+  async function focus(id, { preserveProject = true } = {}) {
     const workspace = find(id);
+    // Read the outgoing window before creating/restoring the destination can
+    // change focus. Geometry never comes from the pinned base or unrelated windows.
+    let bounds;
+    try { if (preserveProject) bounds = await replacementBounds(id); }
+    catch (error) { warning = error.message; }
     const windowId = await ensureLive(workspace);
-    const window = await normalWindow(windowId);
-    await edit(() => api.windows.update(windowId, { ...(window.state === "minimized" ? { state: "normal" } : {}), focused: true }));
+    let window = await normalWindow(windowId);
+    if (window.state === "minimized") {
+      await edit(() => api.windows.update(windowId, { state: "normal" }));
+      window = await normalWindow(windowId);
+    }
+    if (bounds && window.state === "normal") {
+      try { await edit(() => api.windows.update(windowId, bounds)); }
+      catch (error) { warning = error.message; }
+    }
+    await edit(() => api.windows.update(windowId, { focused: true }));
+    await rememberProjectBounds(await normalWindow(windowId));
     await rememberFocus(id);
-    await minimizeOtherWindows(id);
+    await minimizeOtherWindows(id, { preserveProject });
     await captureAll();
   }
-  async function minimizeOtherWindows(id) {
-    if (data.minimizeOthers) {
-      for (const [otherId, otherWindowId] of bindings) {
-        if (otherId === id || otherId === data.pinnedWorkspaceId) continue;
-        try { await edit(() => api.windows.update(otherWindowId, { state: "minimized" })); }
-        catch (error) { warning = error.message; }
+  async function minimizeOtherWindows(id, { preserveProject = true, expectedWindowId } = {}) {
+    if (!data.minimizeOthers) return;
+    const keep = new Set([id, data.pinnedWorkspaceId]);
+    // Visiting the pinned base is not leaving the current project. Keep the most
+    // recently used visible project, but never reopen a closed or minimised one.
+    if (preserveProject && id === data.pinnedWorkspaceId) {
+      for (const projectId of recent) {
+        if (keep.has(projectId) || !bindings.has(projectId)) continue;
+        try {
+          if ((await normalWindow(bindings.get(projectId))).state === "minimized") continue;
+          keep.add(projectId);
+          break;
+        } catch { /* A closed window is not a project to keep visible. */ }
       }
+    }
+    for (const [otherId, otherWindowId] of bindings) {
+      if (keep.has(otherId)) continue;
+      try {
+        if ((await normalWindow(otherWindowId)).state === "minimized") continue;
+        if (expectedWindowId !== undefined) {
+          const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
+          if (!current.focused || current.id !== expectedWindowId) return;
+        }
+        await edit(() => api.windows.update(otherWindowId, { state: "minimized" }));
+      } catch (error) { warning = error.message; }
     }
   }
   async function moveTab(tabId, destinationId, follow = false, manual = true) {
@@ -383,10 +451,12 @@ export function createWindowWorkspaces(api) {
         }
         case "setPinnedWorkspace": {
           if (message.workspaceId !== null) find(message.workspaceId);
+          // Capture the old project before changing which window is the base.
+          await rememberProjectBounds(await api.windows.getLastFocused({ windowTypes: ["normal"] }));
           data.pinnedWorkspaceId = message.workspaceId;
           await persist();
           if (message.workspaceId !== null) {
-            await focus(message.workspaceId);
+            await focus(message.workspaceId, { preserveProject: false });
           } else {
             const window = await api.windows.getLastFocused({ windowTypes: ["normal"] });
             const current = workspaceForWindow(window.id);
@@ -409,7 +479,7 @@ export function createWindowWorkspaces(api) {
         case "addRoute": {
           find(message.contextId);
           const hostname = cleanHostnameInput(message.hostname);
-          if (!isValidRouteHostname(hostname)) throw new Error("Enter an exact hostname or *.example.com.");
+          if (!isValidRouteHostname(hostname)) throw new Error("Enter a hostname such as example.com. Subdomains are included automatically.");
           data.routes = [...data.routes.filter((route) => route.hostname !== hostname),
             { id: crypto.randomUUID(), hostname, contextId: message.contextId, activate: message.activate === true }];
           await persist();
@@ -497,7 +567,10 @@ export function createWindowWorkspaces(api) {
     if (!workspace) return;
     // A queued focus event may describe an intermediate window we have already left.
     const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
-    if (current.id === windowId) await rememberFocus(workspace.id);
+    if (!current.focused || current.id !== windowId) return;
+    await rememberProjectBounds(current);
+    await rememberFocus(workspace.id);
+    await minimizeOtherWindows(workspace.id, { expectedWindowId: windowId });
   }));
   api.commands.onCommand.addListener((command) => event(async () => {
     if (command === "previous-workspace") {

@@ -79,7 +79,7 @@ test("migration restores defaults, upgrades the old delay, and preserves custom 
 test("backup files round-trip configuration and recovery records without a window ID", () => {
   const original = createInitialState();
   original.managedWindowId = 42;
-  original.routes = [{ id: "route-1", hostname: "*.example.com", contextId: "work" }];
+  original.routes = [{ id: "route-1", hostname: "example.com", contextId: "work" }];
   original.records = {
     "record-1": record({ id: "record-1", contextId: "work", url: "https://app.example.com" }),
   };
@@ -118,36 +118,39 @@ test("backup validation rejects malformed and future data before migration", () 
   assert.equal(migrateState({ contexts: [null] }).contexts.length, 3);
 });
 
-test("hostname matching is exact and ignores only a leading www", () => {
+test("hostname matching leaves sibling subdomains separate", () => {
   const routes = [{ id: "one", hostname: "app.example.com", contextId: "work" }];
   assert.equal(normalizeHostname("https://www.Reddit.com/r/test"), "reddit.com");
   assert.equal(routeForUrl(routes, "https://app.example.com/jobs")?.contextId, "work");
   assert.equal(routeForUrl(routes, "https://other.example.com/jobs"), null);
 });
 
-test("wildcard routes match subdomains but not the apex or lookalike domains", () => {
-  const routes = [{ id: "wild", hostname: "*.hnry.io", contextId: "work" }];
-  assert.equal(cleanHostnameInput("HTTPS://*.HNRY.IO/path"), "*.hnry.io");
-  assert.equal(cleanHostnameInput("https://%2a.hnry.io"), "*.hnry.io");
-  assert.equal(isValidRouteHostname("*.hnry.io"), true);
-  assert.equal(isValidRouteHostname("not a hostname"), false);
-  assert.equal(routeForUrl(routes, "https://app.hnry.io")?.id, "wild");
-  assert.equal(routeForUrl(routes, "https://deep.app.hnry.io")?.id, "wild");
-  assert.equal(routeForUrl(routes, "https://www.hnry.io")?.id, "wild");
-  assert.equal(routeForUrl(routes, "https://hnry.io"), null);
-  assert.equal(routeForUrl(routes, "https://fakehnry.io"), null);
-  assert.equal(routeForUrl(routes, "https://hnry.io.attacker.example"), null);
+test("hostname routes match the apex and all subdomains, but not lookalikes", () => {
+  const routes = [{ id: "domain", hostname: "haume.nz", contextId: "work" }];
+  assert.equal(cleanHostnameInput("HTTPS://Haume.NZ./path"), "haume.nz");
+  assert.equal(isValidRouteHostname("haume.nz"), true);
+  for (const invalid of ["*.haume.nz", "https://%2a.haume.nz", "not a hostname", "haume..nz"]) {
+    assert.equal(isValidRouteHostname(invalid), false);
+  }
+  for (const host of ["haume.nz", "www.haume.nz", "app.haume.nz", "deep.app.haume.nz"]) {
+    assert.equal(routeForUrl(routes, `https://${host}/page`)?.id, "domain");
+  }
+  assert.equal(routeForUrl(routes, "https://nothaume.nz"), null);
+  assert.equal(routeForUrl(routes, "https://haume.nz.attacker.example"), null);
 });
 
-test("exact routes beat wildcards and the most specific wildcard wins", () => {
+test("the most specific hostname wins regardless of rule order", () => {
   const routes = [
-    { id: "broad", hostname: "*.example.com", contextId: "personal" },
-    { id: "specific", hostname: "*.work.example.com", contextId: "work" },
-    { id: "exact", hostname: "app.work.example.com", contextId: "groundtruth" },
+    { id: "broad", hostname: "haume.nz", contextId: "work" },
+    { id: "specific", hostname: "musi.haume.nz", contextId: "personal" },
+    { id: "www", hostname: "www.haume.nz", contextId: "groundtruth" },
   ];
-  assert.equal(routeForUrl(routes, "https://app.work.example.com")?.id, "exact");
-  assert.equal(routeForUrl(routes, "https://other.work.example.com")?.id, "specific");
-  assert.equal(routeForUrl(routes, "https://elsewhere.example.com")?.id, "broad");
+  for (const ordered of [routes, [...routes].reverse()]) {
+    assert.equal(routeForUrl(ordered, "https://musi.haume.nz")?.id, "specific");
+    assert.equal(routeForUrl(ordered, "https://deep.musi.haume.nz")?.id, "specific");
+    assert.equal(routeForUrl(ordered, "https://www.haume.nz")?.id, "www");
+    assert.equal(routeForUrl(ordered, "https://elsewhere.haume.nz")?.id, "broad");
+  }
 });
 
 test("new tabs prefer strict routes, then opener, then active context", () => {

@@ -919,7 +919,7 @@ async function saveContexts(contexts) {
 async function addRoute(hostname, contextId, moveExisting = true) {
   const clean = cleanHostnameInput(hostname);
   if (!isValidRouteHostname(clean)) {
-    throw new Error("Enter a hostname such as app.example.com or *.example.com.");
+    throw new Error("Enter a hostname such as example.com. Subdomains are included automatically.");
   }
   if (!contextById(contextId)) throw new Error("Choose a context.");
 

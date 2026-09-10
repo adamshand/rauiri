@@ -149,12 +149,12 @@ test("timeouts never replay an unknown edit and re-observe after late completion
 
 test("adding a broad route does not steal tabs from a more specific route", async () => {
   const stored = domain.createInitialState();
-  stored.routes = [{ id: "specific", hostname: "*.white.haume.nz", contextId: "work" }];
+  stored.routes = [{ id: "specific", hostname: "white.haume.nz", contextId: "work" }];
   const app = await harness({ stored });
   await app.evaluate("operation");
   app.evaluate("state.managedWindowId = 1; globalThis.presentations = 0; presentTab = async () => { presentations++; }");
   app.chrome.tabs.query = async () => [{ id: 3, windowId: 1, url: "https://app.white.haume.nz", active: false }];
-  await app.evaluate("addRoute('*.haume.nz', 'personal', true)");
+  await app.evaluate("addRoute('haume.nz', 'personal', true)");
   assert.equal(app.evaluate("presentations"), 0);
 });
 

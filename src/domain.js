@@ -196,7 +196,7 @@ function rawHostname(input) {
   try {
     const value = String(input).trim();
     const candidate = value.includes("://") ? value : `https://${value}`;
-    return new URL(candidate).hostname.toLowerCase().replace(/^%2a\./, "*.").replace(/\.$/, "");
+    return new URL(candidate).hostname.toLowerCase().replace(/\.$/, "");
   } catch {
     return String(input).trim().toLowerCase().replace(/\.$/, "");
   }
@@ -207,32 +207,22 @@ export function normalizeHostname(input) {
 }
 
 export function cleanHostnameInput(value) {
-  const hostname = rawHostname(value);
-  if (hostname.startsWith("*.")) return `*.${hostname.slice(2)}`;
-  return hostname.replace(/^www\./, "");
+  return rawHostname(value);
 }
 
 export function isValidRouteHostname(value) {
-  const clean = cleanHostnameInput(value);
-  const host = clean.startsWith("*.") ? clean.slice(2) : clean;
-  return Boolean(host) && /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(host);
+  const host = cleanHostnameInput(value);
+  return Boolean(host) && host.split(".").every((label) => /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(label));
 }
 
 export function routeForUrl(routes, url) {
   const hostname = rawHostname(url);
   if (!hostname) return null;
 
-  const exactHostname = hostname.replace(/^www\./, "");
-  const exact = routes.find((route) => {
-    const pattern = cleanHostnameInput(route.hostname);
-    return !pattern.startsWith("*.") && pattern === exactHostname;
-  });
-  if (exact) return exact;
-
   return routes
-    .map((route) => ({ route, pattern: cleanHostnameInput(route.hostname) }))
-    .filter(({ pattern }) => pattern.startsWith("*.") && hostname.endsWith(pattern.slice(1)))
-    .sort((left, right) => right.pattern.length - left.pattern.length)[0]?.route || null;
+    .map((route) => ({ route, host: cleanHostnameInput(route.hostname) }))
+    .filter(({ host }) => host && (hostname === host || hostname.endsWith(`.${host}`)))
+    .sort((left, right) => right.host.length - left.host.length)[0]?.route || null;
 }
 
 export function isRoutableUrl(url) {
