@@ -50,8 +50,14 @@ function harness() {
         Object.assign(windows.get(id), props);
         return api.windows.get(id);
       },
+      remove: async (id) => {
+        calls.push(["window.remove", id]);
+        for (const [tabId, tab] of tabs) if (tab.windowId === id) tabs.delete(tabId);
+        windows.delete(id);
+        api.windows.onRemoved.emit(id);
+      },
       getLastFocused: async () => ({ ...[...windows.values()].find((window) => window.focused) }),
-      onFocusChanged: event(), onRemoved: event(),
+      onFocusChanged: event(), onRemoved: event(), onCreated: event(),
     },
     tabs: {
       get: async (id) => { if (!tabs.has(id)) throw new Error("No tab"); return { ...tabs.get(id) }; },
@@ -100,7 +106,7 @@ test("migration moves existing tabs, keeps pins and retains the original backup"
   assert.equal(view.workspaces.find((w) => w.id === "work").windowId, 10);
   assert.equal(app.tabs.get(2).windowId, 10);
   assert.equal(app.tabs.get(3).pinned, true);
-  assert.equal(app.tabs.size, 3);
+  assert.equal(app.tabs.size, 4, "Read Later gets its own blank window");
   assert.equal(app.local.rauiriBeforeWindowMode.contexts.length, 3);
 });
 
@@ -258,7 +264,7 @@ test("changing a saved route destination preserves its identity and behavior wit
   const app = await enabled();
   await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "personal", activate: true });
   const route = (await app.controller.handle({ type: "snapshot" })).routes[0];
-  const original = structuredClone(route);
+  const original = structuredClone(app.local.rauiriWindowWorkspaces.routes[0]);
   app.calls.length = 0;
   await app.controller.handle({ type: "updateRouteDestination", routeId: route.id, contextId: "work" });
   assert.deepEqual(app.local.rauiriWindowWorkspaces.routes[0], { ...original, contextId: "work" });
@@ -419,9 +425,14 @@ test("pinned-window resizing does not replace remembered project geometry", asyn
 test("4 → 5 → Personal copies bounds even when Personal restores asynchronously", async () => {
   const app = await enabled();
   await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  for (const [slot, id] of [[4, "groundtruth"], [5, "inactive"]]) {
+    await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: id });
+    await app.controller.handle({ type: "assignWorkspaceShortcut", slot, workspaceId: id });
+  }
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
   app.api.commands.onCommand.emit("workspace-4");
   await app.barrier();
-  const fourth = (await app.controller.handle({ type: "snapshot" })).workspaces[3].windowId;
+  const fourth = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "groundtruth").windowId;
   const bounds = { left: -1100, top: 60, width: 1000, height: 850 };
   Object.assign(app.windows.get(fourth), bounds);
   app.api.commands.onCommand.emit("workspace-5");
@@ -623,6 +634,345 @@ test("explicit address-bar intent overrides manual filing but never native pins"
   app.api.webNavigation.onCommitted.emit({ tabId: 3, frameId: 0, url: "https://pin.example", transitionType: "typed" });
   await app.barrier();
   assert.equal(app.tabs.get(3).windowId, 1);
+});
+
+test("put away saves tabs before closing, clears the pin, and pauses routes until explicit resume", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "work.example", contextId: "work" });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  const remove = app.api.windows.remove;
+  app.api.windows.remove = async (id) => {
+    assert.equal(app.local.rauiriWindowWorkspaces.workspaces.find((w) => w.id === "work").tabs.length, 1);
+    return remove(id);
+  };
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  let view = await app.controller.handle({ type: "snapshot" });
+  assert.equal(view.pinnedWorkspaceId, null);
+  assert.equal(view.routes[0].active, false);
+  assert.equal(view.workspaces.find((w) => w.id === "work").windowId, null);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  const tab = await app.api.tabs.create({ windowId: 1, url: "https://work.example", active: true });
+  app.calls.length = 0;
+  app.api.webNavigation.onCommitted.emit({ tabId: tab.id, frameId: 0, url: tab.url, transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(tab.id).windowId, 1);
+  assert.equal(app.calls.some(([method]) => method === "window.create"), false);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  view = await app.controller.handle({ type: "snapshot" });
+  assert.equal(view.routes[0].active, true);
+  assert.equal(app.tabs.get(tab.id).windowId, 1, "resuming must not sweep existing tabs");
+});
+
+test("manual closure pauses routes and pinning cannot resume a put-away workspace", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "work.example", contextId: "work" });
+  await app.api.windows.remove(10);
+  await app.barrier();
+  assert.equal((await app.controller.handle({ type: "snapshot" })).routes[0].active, false);
+  await assert.rejects(app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" }), /Resume/);
+});
+
+test("put-away fails safely if storage or closing fails", async () => {
+  for (const failure of ["storage", "close"]) {
+    const app = await enabled();
+    if (failure === "storage") app.api.storage.local.set = async () => { throw new Error("Disk full"); };
+    else app.api.windows.remove = async () => {}; // A cancelled close leaves its window alive.
+    await assert.rejects(app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" }), /Disk full|still open/);
+    assert.equal(app.windows.has(10), true);
+    assert.equal(app.tabs.has(2), true);
+    assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "work").windowId, 10);
+    assert.equal(app.calls.some(([method]) => method === "window.remove"), false);
+  }
+});
+
+test("stale route bindings never restore a closed destination", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work" });
+  app.windows.delete(10);
+  app.tabs.delete(2); // Simulate closure before onRemoved has been delivered.
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://personal.example", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 1);
+  assert.equal(app.calls.some(([method]) => method === "window.create"), false);
+});
+
+test("adding a route to a put-away workspace does not move existing tabs", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "groundtruth", moveExisting: true });
+  assert.equal(app.tabs.get(1).windowId, 1);
+  assert.equal(app.calls.some(([method]) => method === "window.create"), false);
+});
+
+test("active workspace merge moves actual tabs and native pins, retargets rules, and retains a backup", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "personal" });
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "personal" });
+  app.calls.length = 0;
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" });
+  const view = await app.controller.handle({ type: "snapshot" });
+  assert.equal(view.workspaces.some((w) => w.id === "personal"), false);
+  assert.equal(view.pinnedWorkspaceId, null);
+  assert.equal(view.routes[0].contextId, "work");
+  assert.equal(app.tabs.get(1).windowId, 10);
+  assert.equal(app.tabs.get(3).windowId, 10);
+  assert.equal(app.tabs.get(3).pinned, true);
+  assert.equal(app.calls.some(([method]) => method === "tab.create" || method === "window.remove"), false);
+  const backup = await app.controller.handle({ type: "exportWorkspaceDeletionBackup" });
+  assert.equal(backup.state.workspaces.find((w) => w.id === "personal").tabs.length, 2);
+});
+
+test("a failed live merge leaves the source workspace and every live tab recoverable", async () => {
+  const app = await enabled();
+  const move = app.api.tabs.move;
+  app.api.tabs.move = async (id, props) => {
+    if (id === 3) throw new Error("Move failed");
+    return move(id, props);
+  };
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" }), /Move failed/);
+  assert.equal(app.tabs.size, 4);
+  assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.some((w) => w.id === "personal"), true);
+  assert.equal(app.local.rauiriBeforeWorkspaceDelete.workspaces.find((w) => w.id === "personal").tabs.length, 2);
+});
+
+test("put-away workspace tabs and rules can merge into another put-away workspace without opening windows", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "work.example", contextId: "work" });
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  app.calls.length = 0;
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "work", destinationId: "groundtruth", tabs: "move", rules: "move" });
+  assert.equal(app.calls.length, 0);
+  const stored = app.local.rauiriWindowWorkspaces;
+  assert.equal(stored.workspaces.find((w) => w.id === "groundtruth").tabs[0].url, "https://work.example");
+  assert.equal(stored.routes[0].contextId, "groundtruth");
+  assert.equal((await app.controller.handle({ type: "snapshot" })).routes[0].active, false);
+});
+
+test("put-away deletion can discard tabs while retaining rules at a chosen destination", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "work.example", contextId: "work" });
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "work", destinationId: "personal", tabs: "delete", rules: "move" });
+  assert.equal(app.local.rauiriWindowWorkspaces.routes[0].contextId, "personal");
+  assert.equal(app.tabs.size, 3);
+});
+
+test("put-away deletion can discard both remembered tabs and rules with no browser edits", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "work.example", contextId: "work" });
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  app.calls.length = 0;
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "work", tabs: "delete", rules: "delete" });
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.local.rauiriWindowWorkspaces.routes.length, 0);
+  assert.equal(app.local.rauiriWindowWorkspaces.workspaces.some((w) => w.id === "work"), false);
+  const backup = await app.controller.handle({ type: "exportWorkspaceDeletionBackup" });
+  assert.equal(backup.state.routes.length, 1);
+  assert.equal(backup.state.workspaces.find((w) => w.id === "work").tabs.length, 1);
+});
+
+test("a put-away merge into an active destination keeps the full inventory if opening a tab fails", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  const create = app.api.tabs.create;
+  app.api.tabs.create = async () => { throw new Error("Cannot create tab"); };
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "work", destinationId: "personal", tabs: "move", rules: "move" }), /Cannot create tab/);
+  const target = app.local.rauiriWindowWorkspaces.workspaces.find((w) => w.id === "personal");
+  assert.equal(target.tabs.length, 3);
+  assert.equal(target.restorePending, true);
+  assert.equal(app.local.rauiriWindowWorkspaces.workspaces.some((w) => w.id === "work"), false);
+  app.api.tabs.create = create;
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
+  assert.equal([...app.tabs.values()].filter((tab) => tab.url === "https://work.example").length, 1);
+});
+
+test("live merging stops if new tabs appear in its source window", async () => {
+  const app = await enabled();
+  const move = app.api.tabs.move;
+  let added = false;
+  app.api.tabs.move = async (id, props) => {
+    if (!added) {
+      added = true;
+      await app.api.tabs.create({ windowId: 1, url: "https://new.example" });
+    }
+    return move(id, props);
+  };
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" }), /New tabs appeared/);
+  assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.some((w) => w.id === "personal"), true);
+  assert.equal(app.tabs.size, 5);
+});
+
+test("deletion backup failure prevents live tab moves", async () => {
+  const app = await enabled();
+  const set = app.api.storage.local.set;
+  app.api.storage.local.set = async (value) => {
+    if (value.rauiriBeforeWorkspaceDelete) throw new Error("Backup failed");
+    return set(value);
+  };
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" }), /Backup failed/);
+  assert.equal(app.calls.some(([method]) => method === "tab.move"), false);
+  assert.equal(app.tabs.get(1).windowId, 1);
+});
+
+test("a broader active route can match when the more specific workspace is put away", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "addRoute", hostname: "example.com", contextId: "work" });
+  await app.controller.handle({ type: "addRoute", hostname: "app.example.com", contextId: "groundtruth" });
+  await app.api.tabs.update(1, { url: "https://app.example.com" });
+  app.api.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, url: "https://app.example.com", transitionType: "typed" });
+  await app.barrier();
+  assert.equal(app.tabs.get(1).windowId, 10);
+});
+
+test("deletion rejects live-tab disposal, self-merges, missing choices, and deleting built-in Read Later", async () => {
+  const app = await enabled();
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", tabs: "delete", rules: "delete" }), /active workspace/);
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "personal", tabs: "move", rules: "move" }), /different destination/);
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal" }), /Choose what/);
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "work", destinationId: "personal", tabs: "move", rules: "move" });
+  for (const id of ["groundtruth", "inactive"]) await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: id, tabs: "delete", rules: "delete" });
+  await app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "read-later", tabs: "move", rules: "move" });
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "read-later", tabs: "delete", rules: "delete" }), /built in/);
+});
+
+test("shortcut slots migrate without compacting gaps and validate independently of list order", async () => {
+  const app = await enabled();
+  const state = structuredClone(app.local.rauiriWindowWorkspaces);
+  delete state.shortcutSlots;
+  const migrated = validateWindowState(state);
+  assert.deepEqual(migrated.shortcutSlots.slice(0, 5), ["personal", "work", "groundtruth", null, "inactive"]);
+  migrated.shortcutSlots = ["work", null, "personal", null, null, null, null, null, null];
+  migrated.workspaces.reverse();
+  assert.equal(validateWindowState(migrated).shortcutSlots[0], "work");
+  for (const field of ["shortcutSlots", "closedShortcutSlots"]) {
+    for (const invalid of [null, Array(9), ["personal"], ["read-later", ...Array(8).fill(null)], ["personal", "personal", ...Array(7).fill(null)], ["missing", ...Array(8).fill(null)]]) {
+      assert.throws(() => validateWindowState({ ...migrated, [field]: invalid }), /shortcut/);
+    }
+  }
+});
+
+test("slot assignment swaps occupied slots, supports gaps, and does not depend on workspace order", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "assignWorkspaceShortcut", slot: 1, workspaceId: "work" });
+  let view = await app.controller.handle({ type: "snapshot" });
+  assert.deepEqual(view.shortcutSlots.slice(0, 2), ["work", "personal"]);
+  await app.controller.handle({ type: "saveContexts", contexts: [...view.contexts].reverse() });
+  app.api.commands.onCommand.emit("workspace-1");
+  await app.barrier();
+  assert.equal(app.windows.get(10).focused, true);
+  await app.controller.handle({ type: "assignWorkspaceShortcut", slot: 1, workspaceId: null });
+  app.calls.length = 0;
+  app.api.commands.onCommand.emit("workspace-1");
+  await app.barrier();
+  assert.equal(app.calls.length, 0);
+  view = await app.controller.handle({ type: "snapshot" });
+  assert.equal(view.shortcutSlots[1], "personal");
+  assert.equal(view.workspaces.find((w) => w.id === "read-later").shortcut, 0);
+  assert.equal(view.workspaces.find((w) => w.id === "work").shortcut, null);
+});
+
+test("putting away clears only its own slot and resume does not reclaim it", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  assert.deepEqual((await app.controller.handle({ type: "snapshot" })).shortcutSlots.slice(0, 2), ["personal", null]);
+  app.calls.length = 0;
+  app.api.commands.onCommand.emit("workspace-2");
+  await app.barrier();
+  assert.equal(app.calls.length, 0);
+  await app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "work").shortcut, null);
+});
+
+test("native browser restoration restores shortcut slots, but explicit resume does not", async (t) => {
+  const app = await enabled();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const restoredWindows = structuredClone([...app.windows.entries()]);
+  const restoredTabs = structuredClone([...app.tabs.entries()]);
+  for (const id of [...app.windows.keys()]) await app.api.windows.remove(id);
+  await app.barrier();
+  assert.deepEqual(app.local.rauiriWindowWorkspaces.shortcutSlots.slice(0, 2), [null, null]);
+  for (const [id, window] of restoredWindows) app.windows.set(id, window);
+  for (const [id, tab] of restoredTabs) app.tabs.set(id, tab);
+  delete app.session.rauiriWorkspaceWindows;
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  await restarted.start();
+  assert.deepEqual((await restarted.handle({ type: "snapshot" })).shortcutSlots.slice(0, 2), ["personal", "work"]);
+  assert.equal(app.local.rauiriWindowWorkspaces.closedShortcutSlots.every((id) => id === null), true);
+});
+
+test("backup import remains usable with built-in Read Later open and preserves its live tabs", async () => {
+  const app = await enabled();
+  const readingId = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId;
+  const live = await app.api.tabs.create({ windowId: readingId, url: "https://reading.example/live", pinned: true });
+  const backup = structuredClone(await app.controller.handle({ type: "exportBackup" }));
+  backup.state.workspaces.find((w) => w.id === "read-later").tabs = [{ url: "https://reading.example/imported", title: "Imported", pinned: false, routeOverride: false }];
+  await assert.rejects(app.controller.handle({ type: "importBackup", backup }), /Put away other/);
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "personal" });
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  await app.controller.handle({ type: "importBackup", backup });
+  assert.equal(app.tabs.get(live.id).pinned, true);
+  assert.equal(app.tabs.get(live.id).windowId, readingId);
+  assert.equal([...app.tabs.values()].filter((tab) => tab.url === "https://reading.example/imported").length, 1);
+  assert.equal(app.windows.size, 1);
+  assert.equal((await app.controller.handle({ type: "snapshot" })).shortcutSlots.every((id) => id === null), true);
+});
+
+test("inactive workspaces and Read Later cannot be assigned to ordinary slots", async () => {
+  const app = await enabled();
+  await assert.rejects(app.controller.handle({ type: "assignWorkspaceShortcut", slot: 0, workspaceId: "work" }), /1 to 9/);
+  await assert.rejects(app.controller.handle({ type: "assignWorkspaceShortcut", slot: 3, workspaceId: "read-later" }), /slot 0/);
+  await assert.rejects(app.controller.handle({ type: "assignWorkspaceShortcut", slot: 3, workspaceId: "groundtruth" }), /Resume/);
+});
+
+test("Read Later is restored to old state, protected from removal, and permanently uses slot zero", async () => {
+  const app = await enabled();
+  const state = structuredClone(app.local.rauiriWindowWorkspaces);
+  state.workspaces = state.workspaces.filter((w) => w.id !== "read-later");
+  assert.equal(validateWindowState(state).workspaces.at(-1).id, "read-later");
+  await assert.rejects(app.controller.handle({ type: "putAwayWorkspace", workspaceId: "read-later" }), /built in/);
+  await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "read-later", destinationId: "work", tabs: "move", rules: "move" }), /built in/);
+  const view = await app.controller.handle({ type: "snapshot" });
+  view.contexts.find((w) => w.id === "read-later").title = "Other name";
+  await assert.rejects(app.controller.handle({ type: "saveContexts", contexts: view.contexts }), /name is fixed/);
+  app.api.commands.onCommand.emit("workspace-10");
+  await app.barrier();
+  const windowId = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId;
+  assert.equal(app.windows.get(windowId).focused, true);
+});
+
+test("manually closing Read Later recreates it without stealing focus and preserves its remembered tabs", async (t) => {
+  const app = await enabled();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const oldId = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId;
+  const tab = await app.api.tabs.create({ windowId: oldId, url: "https://reading.example" });
+  app.api.tabs.onUpdated.emit(tab.id, { title: "Reading" });
+  t.mock.timers.tick(100);
+  await app.barrier();
+  await app.api.windows.remove(oldId);
+  await app.barrier();
+  t.mock.timers.tick(300);
+  await app.barrier();
+  const newId = (await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId;
+  assert.notEqual(newId, oldId);
+  assert.equal(app.windows.get(newId).state, "minimized");
+  assert.equal(app.windows.get(1).focused, true);
+  assert.equal([...app.tabs.values()].filter((item) => item.url === "https://reading.example").length, 1);
+});
+
+test("closing every window does not make Read Later fight browser shutdown", async (t) => {
+  const app = await enabled();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const id of [...app.windows.keys()]) await app.api.windows.remove(id);
+  await app.barrier();
+  t.mock.timers.tick(300);
+  await app.barrier();
+  assert.equal(app.windows.size, 0);
+  const window = await app.api.windows.create({ focused: true });
+  app.api.windows.onCreated.emit(window);
+  await app.barrier();
+  t.mock.timers.tick(300);
+  await app.barrier();
+  assert.notEqual((await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId, null);
 });
 
 test("browser restart reconnects exact inventories but leaves ambiguous windows unassigned", async () => {

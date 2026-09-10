@@ -1080,7 +1080,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: "Rauiri commands must come from its popup or Settings." });
     return false;
   }
-  const readOnly = new Set(["snapshot", "configurationSnapshot", "recoverySnapshot", "exportBackup", "exportPreviousBackup", "exportLegacyBackup", "openOptions"]);
+  const readOnly = new Set(["snapshot", "configurationSnapshot", "recoverySnapshot", "exportBackup", "exportPreviousBackup", "exportLegacyBackup", "exportWorkspaceDeletionBackup", "openOptions"]);
   const execute = readOnly.has(message?.type) ? (task) => ready.then(task) : run;
   execute(async () => {
     if (message?.type === "enableWindowWorkspaces") {

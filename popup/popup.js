@@ -19,6 +19,10 @@ const ui = {
   enableWindows: document.querySelector("#enable-window-workspaces"),
   windowSearch: document.querySelector("#window-search"),
   windowList: document.querySelector("#window-list"),
+  archivedSection: document.querySelector("#put-away-workspaces"),
+  archivedList: document.querySelector("#put-away-list"),
+  archivedSummary: document.querySelector("#put-away-summary"),
+  putAway: document.querySelector("#put-away-current"),
   windowDestination: document.querySelector("#window-destination"),
   newWindowForm: document.querySelector("#new-window-workspace"),
   windowName: document.querySelector("#window-name"),
@@ -72,6 +76,8 @@ function render() {
     ui.workspace.hidden = true;
     const current = snapshot.workspaces.find((item) => item.id === snapshot.currentWorkspaceId);
     ui.headingTitle.textContent = current?.title || "Unassigned window";
+    ui.putAway.hidden = !current || current.builtin;
+    ui.putAway.textContent = current ? `Put away ${current.title}` : "Put away this workspace";
     document.documentElement.style.setProperty("--context", colors[current?.color] || colors.grey);
     ui.status.hidden = Boolean(current);
     ui.status.textContent = "This window is not assigned to a workspace";
@@ -79,7 +85,7 @@ function render() {
     renderWindowList();
     const placeholder = new Option("Move this tab…", "", true, true);
     placeholder.disabled = true;
-    ui.windowDestination.replaceChildren(placeholder, ...snapshot.workspaces.filter((item) => item.id !== current?.id).map((item) => new Option(item.title, item.id)));
+    ui.windowDestination.replaceChildren(placeholder, ...snapshot.workspaces.filter((item) => item.id !== current?.id).map((item) => new Option(`${item.title}${item.windowId === null && !item.builtin ? " (put away — resumes)" : ""}`, item.id)));
     updateActionAvailability();
     return;
   }
@@ -139,18 +145,17 @@ function renderWindowList() {
   const rank = (id) => recent.includes(id) ? recent.indexOf(id) : recent.length;
   const workspaces = snapshot.workspaces.filter((item) => item.title.toLocaleLowerCase().includes(search))
     .sort((a, b) => rank(a.id) - rank(b.id));
-  ui.windowList.replaceChildren(...workspaces.map((workspace) => {
+  const renderRow = (workspace) => {
     const row = document.createElement("div");
     row.className = "window-workspace-row";
     const button = document.createElement("button");
     button.className = "window-workspace";
     button.type = "button";
     const title = document.createElement("strong");
-    const slot = snapshot.workspaces.findIndex((item) => item.id === workspace.id) + 1;
-    title.textContent = `${slot <= 10 ? `${slot === 10 ? 0 : slot} · ` : ""}${workspace.title}`;
+    title.textContent = `${workspace.shortcut !== null ? `${workspace.shortcut} · ` : ""}${workspace.title}`;
     const meta = document.createElement("span");
     const current = workspace.id === snapshot.currentWorkspaceId;
-    meta.textContent = `${workspace.restoring ? "Finish restoring" : current ? "Current" : workspace.windowId !== null ? "Live · switch" : "Resume"} · ${workspace.tabCount} saved page${workspace.tabCount === 1 ? "" : "s"}`;
+    meta.textContent = `${workspace.restoring ? "Finish restoring" : current ? "Current" : workspace.windowId !== null ? "Active · switch" : workspace.builtin ? "Reopen built-in workspace" : "Put away · resume"} · ${workspace.tabCount} remembered tab${workspace.tabCount === 1 ? "" : "s"}`;
     button.append(title, meta);
     button.disabled = current && !workspace.restoring;
     button.dataset.current = String(button.disabled);
@@ -161,6 +166,7 @@ function renderWindowList() {
     const pin = document.createElement("button");
     pin.className = "workspace-pin";
     pin.type = "button";
+    pin.hidden = workspace.windowId === null;
     pin.setAttribute("aria-label", `Keep ${workspace.title} alongside other workspaces`);
     pin.setAttribute("aria-pressed", String(workspace.pinned));
     pin.title = workspace.pinned ? `Unpin ${workspace.title}` : `Pin and switch to ${workspace.title}`;
@@ -181,7 +187,13 @@ function renderWindowList() {
       row.append(attach);
     }
     return row;
-  }));
+  };
+  const active = workspaces.filter((workspace) => workspace.builtin || workspace.windowId !== null);
+  const archived = workspaces.filter((workspace) => !workspace.builtin && workspace.windowId === null);
+  ui.windowList.replaceChildren(...(search ? workspaces : active).map(renderRow));
+  ui.archivedList.replaceChildren(...(search ? [] : archived).map(renderRow));
+  ui.archivedSection.hidden = Boolean(search) || !archived.length;
+  ui.archivedSummary.textContent = `Put-away workspaces (${archived.length})`;
   if (!workspaces.length) {
     const empty = document.createElement("p");
     empty.className = "help";
@@ -286,6 +298,14 @@ ui.openWorkspace.addEventListener("click", () => act("Opening workspace…", () 
 ui.enableWindows.addEventListener("click", () => {
   if (!window.confirm("Move this window’s grouped tabs into separate workspace windows? Tabs stay open and an original-state backup is kept. Automatic shelving and group accordion behavior will be disabled in window mode.")) return;
   act("Creating workspace windows…", () => send("enableWindowWorkspaces", { windowId: currentWindow.id }));
+});
+ui.putAway.addEventListener("click", () => {
+  const current = snapshot.workspaces.find((workspace) => workspace.id === snapshot.currentWorkspaceId);
+  if (!current || current.builtin || !window.confirm(`Put away “${current.title}”? Its window will close and its routes will pause. Web URLs, order and pins are saved, but unsaved forms, browser-internal pages and navigation history cannot be restored. Save unfinished work first.`)) return;
+  act("Putting workspace away…", async () => {
+    await send("putAwayWorkspace", { workspaceId: current.id });
+    window.close();
+  });
 });
 ui.windowSearch.addEventListener("input", renderWindowList);
 ui.windowSearch.addEventListener("keydown", (event) => {

@@ -30,6 +30,11 @@
         <label class="field window-move"><span class="visually-hidden">Move this tab</span><select id="window-destination"></select></label>
         <label class="field"><span class="visually-hidden">Find a workspace</span><input id="window-search" type="search" autocomplete="off" placeholder="Find a workspace…"></label>
         <div id="window-list" class="window-list"></div>
+        <details id="put-away-workspaces" class="workspace-controls" hidden>
+          <summary id="put-away-summary">Put-away workspaces</summary>
+          <div id="put-away-list" class="window-list"></div>
+        </details>
+        <button id="put-away-current" class="secondary" type="button" hidden>Put away this workspace</button>
         <details class="workspace-controls">
           <summary>New workspace</summary>
           <form id="new-window-workspace">

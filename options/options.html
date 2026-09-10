@@ -24,11 +24,20 @@
         <div class="section-copy"><h2>Workspace windows</h2><p>Switch without closing tabs. Native pins belong to each workspace window. Automatic shelving is paused in this live-window prototype.</p></div>
         <div class="section-body">
           <label class="checkbox"><input id="minimize-workspaces" type="checkbox"><span>Minimise other workspace windows when switching</span></label>
-          <div class="actions"><button id="save-window-preferences" class="primary" type="button">Save preferences</button><button id="export-group-backup" class="quiet" type="button">Export original group backup</button></div>
+          <div class="actions"><button id="save-window-preferences" class="primary" type="button">Save preferences</button><button id="export-group-backup" class="quiet" type="button">Export original group backup</button><button id="export-workspace-deletion" class="quiet" type="button">Export last deletion backup</button></div>
           <p class="empty">Pin one workspace to keep it alongside the one you’re using. Pinning another replaces it and switches to that window; clicking its pin again clears it. Use the pin icons in the popup or the checkboxes below. Pins do not make windows always-on-top.</p>
-          <p class="empty">Shortcuts: Option/Alt+Shift+Space searches; Option/Alt+Shift+P returns to the previous workspace. Option/Alt+1 and +2 select the first two. Assign 3–9 and 0 below. Chromium supports neither backtick commands nor more than four default assignments.</p>
+          <p class="empty">Shortcuts: Option/Alt+Shift+Space searches; Option/Alt+Shift+P returns to the previous workspace. Option/Alt+1 and +2 select their assigned slots. Configure key bindings for 3–9 and 0 below; slot 0 always opens Read Later. Chromium supports neither backtick commands nor more than four default assignments.</p>
           <button id="keyboard-shortcuts" class="quiet" type="button">Configure keyboard shortcuts</button>
           <p class="empty">Ordinary switching never closes tabs. A closed workspace can reopen its last saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached explicitly from the popup.</p>
+        </div>
+      </section>
+
+      <section id="shortcut-settings" hidden>
+        <div class="section-copy"><h2>Workspace shortcuts</h2><p>Slots 1–9 stay fixed. Drag active workspaces into slots or use the dropdowns. Drag between occupied slots to swap. Changes save immediately.</p></div>
+        <div class="section-body">
+          <div id="shortcut-slots" class="shortcut-slots"></div>
+          <p class="empty">Unassigned active workspaces. Drag a slotted workspace here to clear its slot. Putting away a workspace leaves a gap; resuming does not reclaim it.</p>
+          <div id="shortcut-pool" class="shortcut-pool" aria-label="Unassigned active workspaces"></div>
         </div>
       </section>
 
@@ -146,12 +155,21 @@
       </footer>
     </main>
 
+    <dialog id="delete-workspace-dialog" aria-labelledby="delete-workspace-title">
+      <form id="delete-workspace-form">
+        <h2 id="delete-workspace-title">Delete workspace</h2>
+        <p id="delete-workspace-copy"></p>
+        <label><span>Workspace tabs</span><select id="delete-workspace-tabs"><option value="move">Move to another workspace</option><option value="delete">Discard remembered tabs</option></select></label>
+        <label><span>Routing rules</span><select id="delete-workspace-rules"><option value="move">Move to another workspace</option><option value="delete">Delete rules</option></select></label>
+        <label id="delete-destination-label"><span>Destination workspace</span><select id="delete-workspace-destination"></select></label>
+        <p class="empty">The source workspace will be removed. A backup of the last deletion is available below. Its shortcut slot will become empty. Other shortcuts stay unchanged.</p>
+        <div class="actions"><button id="cancel-workspace-delete" type="button" class="quiet">Cancel</button><button type="submit" class="primary">Confirm deletion / merge</button></div>
+      </form>
+    </dialog>
+
     <template id="context-template">
       <div class="context-row">
-        <div class="order-buttons">
-          <button class="move-up" title="Move up" aria-label="Move context up">↑</button>
-          <button class="move-down" title="Move down" aria-label="Move context down">↓</button>
-        </div>
+        <button class="drag-handle" type="button" draggable="true" title="Drag to reorder, or use Up/Down arrow keys" aria-label="Reorder workspace">⠿</button>
         <input class="context-title" aria-label="Context name">
         <select class="context-color" aria-label="Context colour"></select>
         <button class="remove" title="Remove context" aria-label="Remove context">×</button>

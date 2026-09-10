@@ -29,7 +29,7 @@ async function harness({ stored = domain.createInitialState(), discover = async 
     windows: {
       getAll: discover,
       get: async (id) => ({ id, type: "normal", incognito: false, tabs: [] }),
-      onFocusChanged: event(), onRemoved: event(),
+      onFocusChanged: event(), onRemoved: event(), onCreated: event(),
     },
     tabs: {
       query: async () => [],
