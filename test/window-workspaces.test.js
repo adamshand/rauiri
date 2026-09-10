@@ -416,6 +416,54 @@ test("pinned-window resizing does not replace remembered project geometry", asyn
   for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(1)[key], value);
 });
 
+test("4 → 5 → Personal copies bounds even when Personal restores asynchronously", async () => {
+  const app = await enabled();
+  await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
+  app.api.commands.onCommand.emit("workspace-4");
+  await app.barrier();
+  const fourth = (await app.controller.handle({ type: "snapshot" })).workspaces[3].windowId;
+  const bounds = { left: -1100, top: 60, width: 1000, height: 850 };
+  Object.assign(app.windows.get(fourth), bounds);
+  app.api.commands.onCommand.emit("workspace-5");
+  await app.barrier();
+  const fifth = (await app.controller.handle({ type: "snapshot" })).workspaces[4].windowId;
+  for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(fifth)[key], value);
+  const update = app.api.windows.update;
+  const get = app.api.windows.get;
+  let restoring = false;
+  let reads = 0;
+  app.api.windows.update = async (id, props) => {
+    if (id === 1 && props.state === "normal") {
+      restoring = true;
+      return get(id); // API promise resolves before the native animation finishes.
+    }
+    return update(id, props);
+  };
+  app.api.windows.get = async (id) => {
+    if (id === 1 && restoring && ++reads === 4) app.windows.get(1).state = "normal";
+    return get(id);
+  };
+  app.api.commands.onCommand.emit("workspace-1");
+  await app.barrier();
+  for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(1)[key], value);
+  assert.equal(app.windows.get(1).focused, true);
+});
+
+test("a restore that never completes reports an error rather than silently skipping resizing", async () => {
+  const app = await enabled();
+  const update = app.api.windows.update;
+  app.api.windows.update = async (id, props) => {
+    if (props.state === "normal") return app.api.windows.get(id);
+    return update(id, props);
+  };
+  await assert.rejects(app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "work" }), /still restoring/);
+  assert.equal(app.windows.get(10).state, "minimized");
+  const trace = (await app.controller.handle({ type: "snapshot" })).lastWindowSwitch;
+  assert.equal(trace.workspaceId, "work");
+  assert.equal(trace.before.state, "minimized");
+  assert.equal(trace.after, undefined);
+});
+
 test("special window states do not participate in geometry copying", async () => {
   for (const state of ["maximized", "fullscreen"]) {
     for (const specialId of [1, 10]) {

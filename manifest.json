@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Rauiri",
   "description": "Keep one browser window focused by context while stale tabs settle into Read Later.",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "minimum_chrome_version": "121",
   "permissions": [
     "alarms",

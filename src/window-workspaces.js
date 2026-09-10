@@ -52,6 +52,7 @@ export function createWindowWorkspaces(api) {
   const seeds = new Map(); // blank tabs created by us for a restore
   let timer;
   let projectBounds = null;
+  let lastWindowSwitch = null;
   let recent = []; // Most recently focused first; separate from stable shortcut order.
 
   const ready = (async () => {
@@ -236,6 +237,7 @@ export function createWindowWorkspaces(api) {
   async function replacementBounds(id) {
     const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
     const source = workspaceForWindow(current.id);
+    if (lastWindowSwitch) lastWindowSwitch.source = { workspaceId: source?.id || null, state: current.state, bounds: windowBounds(current) };
     if (!source) return null;
     await rememberProjectBounds(current);
     if (id === data.pinnedWorkspaceId || source.id === id) return null;
@@ -256,23 +258,35 @@ export function createWindowWorkspaces(api) {
   }
   async function focus(id, { preserveProject = true } = {}) {
     const workspace = find(id);
+    lastWindowSwitch = { workspaceId: id, pinnedWorkspaceId: data.pinnedWorkspaceId };
     // Read the outgoing window before creating/restoring the destination can
     // change focus. Geometry never comes from the pinned base or unrelated windows.
     let bounds;
     try { if (preserveProject) bounds = await replacementBounds(id); }
     catch (error) { warning = error.message; }
+    lastWindowSwitch.requestedBounds = bounds || null;
     const windowId = await ensureLive(workspace);
     let window = await normalWindow(windowId);
+    lastWindowSwitch.before = { state: window.state, bounds: windowBounds(window) };
     if (window.state === "minimized") {
       await edit(() => api.windows.update(windowId, { state: "normal" }));
-      window = await normalWindow(windowId);
+      // Chromium can resolve update() before macOS finishes restoring the
+      // window. Wait for the observed state instead of silently skipping bounds.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        window = await normalWindow(windowId);
+        if (window.state !== "minimized") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (window.state === "minimized") throw new Error(`“${workspace.title}” is still restoring. Please try switching again.`);
     }
     if (bounds && window.state === "normal") {
       try { await edit(() => api.windows.update(windowId, bounds)); }
       catch (error) { warning = error.message; }
     }
     await edit(() => api.windows.update(windowId, { focused: true }));
-    await rememberProjectBounds(await normalWindow(windowId));
+    window = await normalWindow(windowId);
+    lastWindowSwitch.after = { state: window.state, bounds: windowBounds(window) };
+    await rememberProjectBounds(window);
     await rememberFocus(id);
     await minimizeOtherWindows(id, { preserveProject });
     await captureAll();
@@ -402,7 +416,7 @@ export function createWindowWorkspaces(api) {
   function overview(windowId) {
     return {
       mode: "windows", managed: Boolean(workspaceForWindow(windowId)), currentWorkspaceId: workspaceForWindow(windowId)?.id || null,
-      browserWarning: warning, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent], pinnedWorkspaceId: data.pinnedWorkspaceId,
+      browserWarning: warning, lastWindowSwitch, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent], pinnedWorkspaceId: data.pinnedWorkspaceId,
       workspaces: data.workspaces.map((workspace) => ({ id: workspace.id, title: workspace.title, color: workspace.color, windowId: bindings.get(workspace.id) ?? null, restoring: workspace.restorePending === true, pinned: workspace.id === data.pinnedWorkspaceId, tabCount: workspace.tabs.length })),
       contexts: data.workspaces.map(({ id, title, color }, order) => ({ id, title, color, order })),
       routes: data.routes, settings: {}, hasManagedWindow: bindings.size > 0, managedWindowId: null,
