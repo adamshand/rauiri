@@ -99,6 +99,21 @@ async function enabled() {
   return app;
 }
 
+test("worker reload reconnects windows before serving snapshots or queued mutations", async () => {
+  const app = await enabled();
+  const expectedBindings = structuredClone(app.session.rauiriWorkspaceWindows);
+  // Inventories can change just before the worker sleeps; session IDs must win.
+  app.tabs.get(1).url = "https://personal.example/changed";
+  const restarted = createWindowWorkspaces(app.api);
+  const mutation = restarted.handle({ type: "setWorkspacePreferences", minimizeOthers: false });
+  const view = await restarted.handle({ type: "snapshot", windowId: 1 });
+  await mutation;
+  assert.equal(view.managed, true);
+  assert.equal(view.currentWorkspaceId, "personal");
+  assert.deepEqual(app.session.rauiriWorkspaceWindows, expectedBindings);
+  assert.equal(app.calls.some(([name]) => name === "window.create"), false);
+});
+
 test("migration moves existing tabs, keeps pins and retains the original backup", async () => {
   const app = await enabled();
   const view = await app.controller.handle({ type: "snapshot", windowId: 1 });

@@ -44,9 +44,6 @@ let browserWarning = null;
 // UI reads depend only on durable state, never on tab-strip presentation.
 const ready = loadState();
 runEvent(initializeBrowser);
-void ready.then(() => {
-  if (windowWorkspaces.enabled) return windowWorkspaces.start();
-}).catch((error) => { browserWarning = error.message; });
 
 function run(task) {
   const result = operation.then(() => ready).then(() => task());

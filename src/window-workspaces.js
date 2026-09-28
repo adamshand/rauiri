@@ -75,7 +75,12 @@ export function createWindowWorkspaces(api) {
 
   const ready = (async () => {
     const stored = await api.storage.local.get(KEY);
-    if (stored[KEY]?.enabled) data = validateWindowState(stored[KEY]);
+    if (stored[KEY]?.enabled) {
+      data = validateWindowState(stored[KEY]);
+      // Reconnect before any snapshot or event can observe/persist empty bindings.
+      // Service workers restart independently of the browser's onStartup event.
+      await start();
+    }
   })();
   // Keep load failures visible without overwriting a malformed stored state.
   void ready.catch((error) => { warning = error.message; });
