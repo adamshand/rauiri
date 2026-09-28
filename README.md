@@ -19,9 +19,9 @@ An **active workspace** has an open browser window, live tabs, and enabled route
 - **Switch** focuses the existing window without recreating tabs. Project-to-project switches copy the outgoing normal window’s position and size. From the pinned base, they use the last live project’s geometry instead. The pinned base, maximised/full-screen windows, and manually selected windows are not resized; when switching from the pinned base with no visible project, Rauiri uses the last remembered project geometry (retained within the browser session). If no geometry is available, the destination keeps its own.
 - **New workspace** creates a separate window for a client, project, or personal area.
 - Tab URLs, order, titles, and pinning are remembered automatically. No repeated Save action.
-- **Move this tab** files it without following, keeping the source window alive and activating a local fallback when necessary. Explicitly choosing a put-away destination resumes that workspace first; the dropdown labels these destinations.
+- **Move tab to** files it without following, keeping the source window alive and activating a local fallback when necessary. Explicitly choosing a put-away destination resumes that workspace first; the dropdown labels these destinations.
 - Pin **one workspace** from the popup to keep it alongside the one you’re using. Pin Personal for evening browsing, then pin Haume for work: the new pin replaces the old one and switches to its window. Click the selected pin again to clear it. Only active workspaces can be pinned. Putting away or closing the pinned window clears the workspace pin.
-- When **Minimise other workspace windows** is enabled in Settings, only the pinned and selected workspace windows are kept visible by Rauiri. Swapping the pin minimises the old base along with other inactive workspaces. Unrelated windows are never minimised; pins are not always-on-top. Numbered shortcuts keep their existing order.
+- When **Minimise other workspaces when switching** is switched on in Settings (it saves immediately), only the pinned and selected workspace windows are kept visible by Rauiri. Swapping the pin minimises the old base along with other inactive workspaces. Unrelated windows are never minimised; pins are not always-on-top. Numbered shortcuts keep their existing order.
 - Selecting or restoring a managed window through macOS follows the same switching rules as Rauiri’s hotkeys. Visiting the pinned base keeps your most recently used visible project alongside it; it does not reopen a project you manually minimised or closed. Unrelated windows and stale focus events are ignored.
 - The old **Keep available** preference migrates to this single pin. If several workspaces were exempt, the first in shortcut order becomes the pin; no tabs are moved or closed by this preference migration.
 - Only rules belonging to active workspaces participate in routing. A URL never wakes a put-away workspace; a broader active rule may still match. Resuming reactivates rules without sweeping up existing tabs elsewhere.
@@ -33,14 +33,14 @@ An **active workspace** has an open browser window, live tabs, and enabled route
 
 ### Reorder, delete, or merge
 
-In Settings, drag a workspace’s handle to reorder it, then **Save workspaces**. Keyboard users can focus the handle and press Up/Down. List order does not affect shortcuts. Settings has separate fixed slots **1–9**, plus **0 — Read Later**. Drag an active workspace into a slot, or use its dropdown; occupied slots swap when moving an already-assigned workspace. Changes save immediately. Drop a slotted workspace into the unassigned area (or choose Empty) to clear it.
+Settings has one **Workspaces** list: fixed numbered rows **1–9**, **0 — Read Later**, then **Other active workspaces** and expandable **Put-away workspaces**. Drag handles between numbered rows to swap occupants without renumbering the others. Drop into an empty row to fill a gap, or into Other active workspaces to leave a gap. Keyboard users can focus a handle and press Up/Down to change its number; **Remove number** clears it. Number changes save immediately. Edit names and colours in the same rows, then **Save workspaces**. Switching, pinning, putting away and deletion are available there too.
 
 The × button opens a deletion/merge dialog:
 
 - Active workspace: choose a destination. Its actual live tabs (including native pins) and rules move there before the source is removed. Tabs are not reloaded. A put-away destination is explicitly resumed for this operation.
 - Put-away workspace: independently choose whether to move or discard its remembered tabs and rules. Moving tabs to an active workspace opens them; merging into another put-away workspace opens no windows.
 - Read Later cannot be deleted, merged away, renamed, or put away. Failed live merges retain the source workspace for review; tabs already moved remain at the destination.
-- **Export last deletion backup** downloads the pre-deletion workspace state. Only the latest deletion/merge backup is retained; export it before another deletion if needed. Import uses the normal backup import flow (put away all workspaces except Read Later).
+- **Restore points → Last deletion** downloads the pre-deletion workspace state. Only the latest deletion/merge backup is retained; export it before another deletion if needed. Import uses the normal backup import flow (put away all workspaces except Read Later).
 
 ### Keyboard switching
 
@@ -50,9 +50,9 @@ Default shortcuts (`Alt` is Option on macOS):
 - **Option/Alt+Shift+P**: toggle back to the previous active workspace, including switches made using native window controls.
 - **Option/Alt+1 / +2**: switch to the workspace assigned to slot 1/2.
 
-Commands for slots **3–9 and 0** are also available: assign Option/Alt+3 through +9 and +0 in **Settings → Configure keyboard shortcuts** (`chrome://extensions/shortcuts`). Chromium permits only four default assignments and does not support backtick as an extension command key. OS/browser conflicts may require rebinding defaults there too.
+Commands for slots **3–9 and 0** are also available: assign Option/Alt+3 through +9 and +0 in **Settings → Keyboard shortcuts → Change bindings** (`chrome://extensions/shortcuts`). Chromium permits only four default assignments and does not support backtick as an extension command key. OS/browser conflicts may require rebinding defaults there too.
 
-Slots **1–9** are independent of list order. Empty slots do nothing. Putting away, closing or deleting a workspace clears only its slot; creating or explicitly resuming one leaves it unassigned. Native browser-session restoration can restore the previous assignments when its workspace windows reconnect. Existing active assignments 1–9 migrate in place; Read Later moves to 0, leaving its former slot empty. Slots are shown beside workspace names in both the popup and Settings. Shortcuts other than opening the popup are inactive in legacy group mode.
+Numbered rows **1–9** stay fixed; there is no separate editable workspace order in window mode. Empty slots do nothing. Putting away, closing or deleting a workspace clears only its slot; creating or explicitly resuming one leaves it unassigned. Native browser-session restoration can restore the previous assignments when its workspace windows reconnect. Existing active assignments 1–9 migrate in place; Read Later moves to 0, leaving its former slot empty. Slots are shown beside workspace names in both the popup and Settings. Shortcuts other than opening the popup are inactive in legacy group mode.
 
 ### Built-in Read Later
 
@@ -87,7 +87,7 @@ Do not resume a put-away-looking workspace if the browser is still restoring it�
 Until you enable window workspaces, Rauiri keeps the original single-window workflow:
 
 - **Manage this window** puts ordinary tabs in Personal and preserves existing recovery records.
-- Broad buckets use accordion tab groups. **Move this tab…** files the current tab elsewhere.
+- Broad buckets use accordion tab groups. **Move tab to** files the current tab elsewhere.
 - Native pins are global within that one window.
 - **Client & project tab sets** are explicit saved URL snapshots, not live workspaces.
 - Automatic shelving sends eligible tabs to Inactive after 72 idle hours. Read Later is intentional reading; both shelves unload idle tabs after two hours. Active, audible, pinned, and strictly routed tabs are excluded from automatic shelving.

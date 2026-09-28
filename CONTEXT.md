@@ -20,7 +20,7 @@ _Avoid_: Archived workspace, stored workspace, cold storage
 The single active workspace kept alongside the current project when focusing work. It is separate from native pinned tabs and clears when its workspace is put away.
 
 **Shortcut slot**:
-A fixed numbered assignment to an active workspace, independent of workspace-list order. Slots 1–9 can be assigned or left empty; slot 0 always belongs to Read Later.
+A fixed numbered position in the workspace list. Positions 1–9 can hold an active workspace or remain empty; position 0 always belongs to Read Later. Additional workspaces remain unnumbered. Moving a workspace between occupied positions swaps them without renumbering the others.
 
 **Workspace merge**:
 Moving a workspace’s tabs and rules into another workspace, then removing the original workspace. Live tabs retain their browsing session rather than being closed and reopened.

@@ -8,36 +8,37 @@
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
+    <header class="page-header">
+      <div class="page-header-inner">
+        <img class="settings-icon" src="../assets/icon-128.png" alt="">
+        <h1>Rauiri <span>Settings</span></h1>
+        <span id="connection" class="connection">Loading…</span>
+      </div>
+    </header>
+
     <main>
-      <header>
-        <div class="settings-title">
-          <img class="settings-icon" src="../assets/icon-128.png" alt="">
-          <div>
-            <span class="eyebrow">Rauiri</span>
-            <h1>Settings</h1>
-          </div>
-        </div>
-        <p>Shape the contexts. Keep the rules sparse.</p>
-      </header>
-
       <section id="window-preferences" hidden>
-        <div class="section-copy"><h2>Workspace windows</h2><p>Switch without closing tabs. Native pins belong to each workspace window. Automatic shelving is paused in this live-window prototype.</p></div>
-        <div class="section-body">
-          <label class="checkbox"><input id="minimize-workspaces" type="checkbox"><span>Minimise other workspace windows when switching</span></label>
-          <div class="actions"><button id="save-window-preferences" class="primary" type="button">Save preferences</button><button id="export-group-backup" class="quiet" type="button">Export original group backup</button><button id="export-workspace-deletion" class="quiet" type="button">Export last deletion backup</button></div>
-          <p class="empty">Pin one workspace to keep it alongside the one you’re using. Pinning another replaces it and switches to that window; clicking its pin again clears it. Use the pin icons in the popup or the checkboxes below. Pins do not make windows always-on-top.</p>
-          <p class="empty">Shortcuts: Option/Alt+Shift+Space searches; Option/Alt+Shift+P returns to the previous workspace. Option/Alt+1 and +2 select their assigned slots. Configure key bindings for 3–9 and 0 below; slot 0 always opens Read Later. Chromium supports neither backtick commands nor more than four default assignments.</p>
-          <button id="keyboard-shortcuts" class="quiet" type="button">Configure keyboard shortcuts</button>
-          <p class="empty">Ordinary switching never closes tabs. A closed workspace can reopen its last saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached explicitly from the popup.</p>
-        </div>
-      </section>
-
-      <section id="shortcut-settings" hidden>
-        <div class="section-copy"><h2>Workspace shortcuts</h2><p>Slots 1–9 stay fixed. Drag active workspaces into slots or use the dropdowns. Drag between occupied slots to swap. Changes save immediately.</p></div>
-        <div class="section-body">
-          <div id="shortcut-slots" class="shortcut-slots"></div>
-          <p class="empty">Unassigned active workspaces. Drag a slotted workspace here to clear its slot. Putting away a workspace leaves a gap; resuming does not reclaim it.</p>
-          <div id="shortcut-pool" class="shortcut-pool" aria-label="Unassigned active workspaces"></div>
+        <div class="section-copy"><h2>Workspace windows</h2><p>Each workspace is its own window. Switching never closes tabs.</p></div>
+        <div class="section-body settings-list">
+          <label class="setting">
+            <span class="setting-copy"><strong>Minimise other workspaces when switching</strong><small>Keeps the dock tidy. The pinned workspace stays visible.</small></span>
+            <span class="switch"><input id="minimize-workspaces" type="checkbox" role="switch"><i aria-hidden="true"></i></span>
+          </label>
+          <div class="setting">
+            <span class="setting-copy"><strong>Keyboard shortcuts</strong><small>Alt+1–9 opens the numbered workspace below. Alt+0 is always Read Later.</small></span>
+            <button id="keyboard-shortcuts" class="quiet" type="button">Change bindings</button>
+          </div>
+          <div class="setting">
+            <span class="setting-copy"><strong>Pinned workspace</strong><small>Pin one workspace to keep it alongside the one you’re using. Pinning another replaces it. Pins don’t make windows always-on-top.</small></span>
+          </div>
+          <div class="setting">
+            <span class="setting-copy"><strong>Restore points</strong><small>Your tab groups from before window mode, and the last workspace you deleted.</small></span>
+            <span class="setting-actions">
+              <button id="export-group-backup" class="quiet" type="button">Original groups</button>
+              <button id="export-workspace-deletion" class="quiet" type="button">Last deletion</button>
+            </span>
+          </div>
+          <p class="note">A put-away workspace reopens its saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached from the popup.</p>
         </div>
       </section>
 
@@ -49,8 +50,8 @@
         <div class="section-body">
           <div id="contexts" class="rows"></div>
           <div class="actions">
-            <button id="add-context" class="quiet">Add context</button>
-            <button id="save-contexts" class="primary">Save contexts</button>
+            <button id="add-context" class="quiet" type="button">Add context</button>
+            <button id="save-contexts" class="primary" type="button">Save contexts</button>
           </div>
         </div>
       </section>
@@ -58,34 +59,38 @@
       <section>
         <div class="section-copy">
           <h2>Strict routes</h2>
-          <p>Add sites that belong to one context every time. Each hostname includes all its subdomains. More-specific hostnames override broader ones. Routed sites stay out of automatic Read Later.</p>
+          <p>Sites that always belong to one context. Each hostname includes its subdomains, and the most specific match wins.</p>
         </div>
         <div class="section-body">
           <form id="route-form" class="route-form">
-            <label>
-              <span>Hostname</span>
-              <input id="route-host" placeholder="example.com or app.example.com" required>
-            </label>
-            <label>
-              <span>Context</span>
-              <select id="route-context"></select>
-            </label>
-            <label class="checkbox">
-              <input id="move-existing" type="checkbox" checked>
-              <span>Move existing matches</span>
-            </label>
-            <label id="activate-route-label" class="checkbox" hidden><input id="activate-route" type="checkbox"><span>Also follow other foreground navigation (address-bar navigation always follows)</span></label>
-            <button class="primary" type="submit">Add route</button>
+            <div class="route-inputs">
+              <label>
+                <span>Hostname</span>
+                <input id="route-host" placeholder="example.com" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Goes to</span>
+                <select id="route-context"></select>
+              </label>
+              <button class="primary" type="submit">Add route</button>
+            </div>
+            <div class="route-options">
+              <label class="checkbox">
+                <input id="move-existing" type="checkbox" checked>
+                <span>Move existing matching tabs</span>
+              </label>
+              <label id="activate-route-label" class="checkbox" hidden><input id="activate-route" type="checkbox"><span>Follow links and other navigation too (the address bar always follows)</span></label>
+            </div>
           </form>
-          <p class="empty">Change a saved route’s destination below. Changes save immediately; existing tabs stay where they are.</p>
           <div id="routes" class="route-list"></div>
+          <p class="note">Changing a destination saves immediately; tabs already open stay where they are.</p>
         </div>
       </section>
 
       <section>
         <div class="section-copy">
           <h2>Workspaces</h2>
-          <p>Save selected tabs from the popup for a client or task. Workspaces live inside buckets, not as permanent extra groups. Opening adds missing pages; it never closes tabs.</p>
+          <p>Save selected tabs from the popup for a client or task. Opening adds missing pages; it never closes tabs.</p>
         </div>
         <div id="workspaces" class="section-body route-list"></div>
       </section>
@@ -97,7 +102,7 @@
         </div>
         <div class="section-body lifecycle">
           <label>
-            <span>Move ordinary tabs after</span>
+            <span>Move ordinary tabs to Inactive after</span>
             <div><input id="archive-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <label>
@@ -105,8 +110,8 @@
             <div><input id="discard-hours" type="number" min="1" max="720" step="1"> hours idle</div>
           </label>
           <div class="actions">
-            <button id="run-sweep" class="quiet">Run sweep now</button>
-            <button id="save-lifecycle" class="primary">Save lifecycle</button>
+            <button id="run-sweep" class="quiet" type="button">Run sweep now</button>
+            <button id="save-lifecycle" class="primary" type="button">Save lifecycle</button>
           </div>
         </div>
       </section>
@@ -114,24 +119,24 @@
       <section>
         <div class="section-copy">
           <h2>Backup</h2>
-          <p>Keep a portable copy before reinstalling Rauiri or moving to another browser profile.</p>
+          <p>A portable copy for reinstalling Rauiri or moving to another browser profile.</p>
         </div>
         <div class="section-body backup-body">
-          <p>Full backups include saved page URLs, which may contain private client information or access tokens. Keep them private. Configuration-only exports omit saved pages and workspace URL sets. Imports replace saved state; a pre-import backup is retained locally. Open tabs are never closed.</p>
-          <label class="checkbox"><input id="configuration-only" type="checkbox"><span>Export configuration only (no saved pages)</span></label>
-          <button id="export-previous-backup" class="text-button" type="button">Download pre-import backup</button>
-          <div class="actions">
-            <button id="import-backup" class="quiet" type="button">Import backup</button>
+          <div class="actions start">
             <button id="export-backup" class="primary" type="button">Export backup</button>
+            <button id="import-backup" class="quiet" type="button">Import backup…</button>
             <input id="backup-file" type="file" accept="application/json,.json" hidden>
           </div>
+          <label class="checkbox"><input id="configuration-only" type="checkbox"><span>Configuration only — leave out saved page URLs</span></label>
+          <p class="note warning">Full backups include saved page URLs, which may contain private client details or access tokens. Keep them private. Importing replaces saved state and never closes open tabs.</p>
+          <p class="note">A copy of your state from before the last import is kept locally. <button id="export-previous-backup" class="text-button" type="button">Download pre-import backup</button></p>
         </div>
       </section>
 
       <section>
         <div class="section-copy">
           <h2>Recovery</h2>
-          <p>Stored pages that no longer match an open browser tab. Review them here before reopening or moving them elsewhere.</p>
+          <p>Stored pages that no longer match an open tab. Review them before reopening.</p>
         </div>
         <div class="section-body">
           <div class="recovery-heading">
@@ -149,11 +154,10 @@
         </div>
       </section>
 
-      <footer>
-        <span id="status" role="status">Loading…</span>
-        <span>Everything stays on this device.</span>
-      </footer>
+      <footer>Everything stays on this device.</footer>
     </main>
+
+    <div id="status" class="toast" role="status" aria-live="polite"></div>
 
     <dialog id="delete-workspace-dialog" aria-labelledby="delete-workspace-title">
       <form id="delete-workspace-form">
@@ -162,17 +166,17 @@
         <label><span>Workspace tabs</span><select id="delete-workspace-tabs"><option value="move">Move to another workspace</option><option value="delete">Discard remembered tabs</option></select></label>
         <label><span>Routing rules</span><select id="delete-workspace-rules"><option value="move">Move to another workspace</option><option value="delete">Delete rules</option></select></label>
         <label id="delete-destination-label"><span>Destination workspace</span><select id="delete-workspace-destination"></select></label>
-        <p class="empty">The source workspace will be removed. A backup of the last deletion is available below. Its shortcut slot will become empty. Other shortcuts stay unchanged.</p>
-        <div class="actions"><button id="cancel-workspace-delete" type="button" class="quiet">Cancel</button><button type="submit" class="primary">Confirm deletion / merge</button></div>
+        <p class="note">The workspace is removed and its shortcut number left empty; other numbers stay the same. A backup of this deletion is kept under Restore points.</p>
+        <div class="actions end"><button id="cancel-workspace-delete" type="button" class="quiet">Cancel</button><button type="submit" class="danger">Delete workspace</button></div>
       </form>
     </dialog>
 
     <template id="context-template">
       <div class="context-row">
-        <button class="drag-handle" type="button" draggable="true" title="Drag to reorder, or use Up/Down arrow keys" aria-label="Reorder workspace">⠿</button>
+        <button class="drag-handle" type="button" draggable="true" title="Drag to reorder, or use Up/Down arrow keys" aria-label="Reorder workspace"><svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor" aria-hidden="true"><circle cx="4" cy="3" r="1.6"/><circle cx="10" cy="3" r="1.6"/><circle cx="4" cy="9" r="1.6"/><circle cx="10" cy="9" r="1.6"/><circle cx="4" cy="15" r="1.6"/><circle cx="10" cy="15" r="1.6"/></svg></button>
+        <label class="color-pick"><select class="context-color" aria-label="Context colour"></select></label>
         <input class="context-title" aria-label="Context name">
-        <select class="context-color" aria-label="Context colour"></select>
-        <button class="remove" title="Remove context" aria-label="Remove context">×</button>
+        <button class="remove" type="button" title="Remove context" aria-label="Remove context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
     </template>
 

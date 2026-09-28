@@ -83,9 +83,9 @@ function render() {
     ui.status.textContent = "This window is not assigned to a workspace";
     ui.message.textContent = snapshot.browserWarning || "";
     renderWindowList();
-    const placeholder = new Option("Move this tab…", "", true, true);
+    const placeholder = new Option("Choose a workspace…", "", true, true);
     placeholder.disabled = true;
-    ui.windowDestination.replaceChildren(placeholder, ...snapshot.workspaces.filter((item) => item.id !== current?.id).map((item) => new Option(`${item.title}${item.windowId === null && !item.builtin ? " (put away — resumes)" : ""}`, item.id)));
+    ui.windowDestination.replaceChildren(placeholder, ...snapshot.workspaces.filter((item) => item.id !== current?.id).map((item) => new Option(`${item.title}${item.windowId === null && !item.builtin ? " (put away)" : ""}`, item.id)));
     updateActionAvailability();
     return;
   }
@@ -115,7 +115,7 @@ function render() {
   setContextOptions(ui.activeContext, snapshot.contexts, snapshot.activeContextId);
   const record = snapshot.currentRecord;
   const onShelf = ["readLater", "inactive"].includes(record?.attention);
-  const placeholder = new Option("Move this tab…", "", true, true);
+  const placeholder = new Option("Choose a bucket…", "", true, true);
   placeholder.disabled = true;
   ui.tabContext.replaceChildren(placeholder, ...snapshot.contexts.map((context) => {
     const option = new Option(context.title, context.id);
@@ -151,12 +151,26 @@ function renderWindowList() {
     const button = document.createElement("button");
     button.className = "window-workspace";
     button.type = "button";
-    const title = document.createElement("strong");
-    title.textContent = `${workspace.shortcut !== null ? `${workspace.shortcut} · ` : ""}${workspace.title}`;
-    const meta = document.createElement("span");
     const current = workspace.id === snapshot.currentWorkspaceId;
-    meta.textContent = `${workspace.restoring ? "Finish restoring" : current ? "Current" : workspace.windowId !== null ? "Active · switch" : workspace.builtin ? "Reopen built-in workspace" : "Put away · resume"} · ${workspace.tabCount} remembered tab${workspace.tabCount === 1 ? "" : "s"}`;
-    button.append(title, meta);
+    const state = workspace.restoring ? "restoring" : current ? "current" : workspace.windowId !== null ? "active" : workspace.builtin ? "closed" : "put-away";
+    row.dataset.state = state;
+    row.style.setProperty("--swatch", colors[workspace.color] || colors.grey);
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    const title = document.createElement("span");
+    title.className = "workspace-name";
+    title.textContent = workspace.title;
+    const meta = document.createElement("span");
+    meta.className = "workspace-meta";
+    const status = { restoring: "Finish restoring", current: "Current", active: "Active", closed: "Closed · reopen", "put-away": "Put away · resume" }[state];
+    meta.textContent = `${status} · ${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`;
+    button.append(swatch, title, meta);
+    if (workspace.shortcut !== null) {
+      const key = document.createElement("kbd");
+      key.textContent = String(workspace.shortcut);
+      key.title = `Alt+${workspace.shortcut}`;
+      button.append(key);
+    }
     button.disabled = current && !workspace.restoring;
     button.dataset.current = String(button.disabled);
     button.addEventListener("click", () => act("Switching workspace…", async () => {
@@ -196,7 +210,7 @@ function renderWindowList() {
   ui.archivedSummary.textContent = `Put-away workspaces (${archived.length})`;
   if (!workspaces.length) {
     const empty = document.createElement("p");
-    empty.className = "help";
+    empty.className = "list-empty";
     empty.textContent = "No matching workspaces.";
     ui.windowList.append(empty);
   }

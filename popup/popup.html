@@ -10,74 +10,87 @@
   <body>
     <main>
       <header>
-        <img class="brand-mark" src="../assets/icon-48.png" width="30" height="30" alt="">
-        <div class="heading-copy">
-          <h1 id="heading-title">Rauiri</h1>
-        </div>
+        <img class="brand-mark" src="../assets/icon-48.png" width="28" height="28" alt="">
+        <h1 id="heading-title">Rauiri</h1>
         <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Settings">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.6"/><circle cx="15" cy="17" r="2.6"/></svg>
         </button>
       </header>
       <p id="status" class="status">Finding your window…</p>
 
-      <section id="setup" hidden>
+      <section id="setup" class="card" hidden>
         <p id="setup-copy">This window is outside Rauiri.</p>
         <button id="adopt" class="primary" type="button">Manage this window</button>
         <button id="focus-managed" class="secondary" type="button" hidden>Go to managed window</button>
       </section>
 
       <section id="window-workspaces" hidden>
-        <label class="field window-move"><span class="visually-hidden">Move this tab</span><select id="window-destination"></select></label>
-        <label class="field"><span class="visually-hidden">Find a workspace</span><input id="window-search" type="search" autocomplete="off" placeholder="Find a workspace…"></label>
+        <label class="search">
+          <span class="visually-hidden">Find a workspace</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <input id="window-search" type="search" autocomplete="off" placeholder="Switch to…">
+        </label>
         <div id="window-list" class="window-list"></div>
-        <details id="put-away-workspaces" class="workspace-controls" hidden>
+        <details id="put-away-workspaces" class="disclosure" hidden>
           <summary id="put-away-summary">Put-away workspaces</summary>
           <div id="put-away-list" class="window-list"></div>
         </details>
-        <button id="put-away-current" class="secondary" type="button" hidden>Put away this workspace</button>
-        <details class="workspace-controls">
-          <summary>New workspace</summary>
-          <form id="new-window-workspace">
-            <label class="field"><span>Name</span><input id="window-name" autocomplete="off" placeholder="Client A, garden project…" required></label>
-            <button class="primary" type="submit">Create workspace window</button>
-          </form>
-        </details>
-      </section>
 
-      <details id="window-trial" class="workspace-controls">
-        <summary>Try workspace windows</summary>
-        <p class="help">Each bucket becomes its own window, with real native pins. Switching keeps tabs alive. Existing groups in this window will be split into workspace windows; nothing is closed. An original-state backup is retained.</p>
-        <button id="enable-window-workspaces" class="primary" type="button">Use workspace windows</button>
-      </details>
+        <div class="tab-tools">
+          <label class="move-tab">
+            <span>Move tab to</span>
+            <select id="window-destination"></select>
+          </label>
+        </div>
+
+        <div class="footer-actions">
+          <details class="new-workspace">
+            <summary>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              New workspace
+            </summary>
+            <form id="new-window-workspace">
+              <label class="visually-hidden" for="window-name">Workspace name</label>
+              <input id="window-name" autocomplete="off" placeholder="Client A, garden project…" required>
+              <button class="primary" type="submit">Create</button>
+            </form>
+          </details>
+          <button id="put-away-current" class="ghost" type="button" hidden>Put away this workspace</button>
+        </div>
+      </section>
 
       <section id="workspace" hidden>
         <label class="bucket-switch">
-          <span><i aria-hidden="true"></i> Switch bucket</span>
+          <span>Bucket</span>
           <select id="active-context" name="active-context"></select>
         </label>
 
-        <section class="tab-actions" aria-label="Actions for this tab">
+        <section class="card tab-actions" aria-label="Actions for this tab">
           <p id="tab-location" class="tab-location" hidden></p>
-          <label class="move-action">
-            <span class="visually-hidden">Move this tab to a bucket</span>
+          <label class="move-tab">
+            <span>Move tab to</span>
             <select id="tab-context" name="tab-context"></select>
           </label>
-          <button id="read-later" class="reading-action" type="button">Send to Read Later</button>
+          <button id="read-later" class="secondary" type="button">Send to Read Later</button>
         </section>
 
-        <details class="workspace-controls">
+        <details class="disclosure">
           <summary>Client &amp; project tab sets</summary>
-          <p class="help">Save selected tabs as a named set—like “Client A”—and reopen missing pages later. No extra group, and no tabs closed.</p>
+          <p class="help">Save selected tabs as a named set—like “Client A”—and reopen missing pages later. No extra group, and no tabs closed. Cmd/Shift-click tabs before opening this popup to save a selection.</p>
           <label class="field"><span>Tab set</span><select id="workspace-select" name="workspace-select"><option value="">New tab set…</option></select></label>
           <label class="field"><span>Name</span><input id="workspace-name" name="workspace-name" autocomplete="off" placeholder="Client A, website rebuild…"></label>
           <label class="field"><span>Save under</span><select id="workspace-context" name="workspace-context"></select></label>
-          <p class="help">Cmd/Shift-click tabs before opening this popup to save a selection.</p>
-          <div class="workspace-actions">
+          <div class="button-row">
             <button id="save-workspace" class="secondary" type="button">Save selected tabs</button>
             <button id="open-workspace" class="primary" type="button" disabled>Open tab set</button>
           </div>
         </details>
       </section>
+      <details id="window-trial" class="disclosure">
+        <summary>Try workspace windows</summary>
+        <p class="help">Each bucket becomes its own window, with real native pins. Switching keeps tabs alive. Existing groups in this window will be split into workspace windows; nothing is closed. An original-state backup is retained.</p>
+        <button id="enable-window-workspaces" class="primary" type="button">Use workspace windows</button>
+      </details>
       <p id="message" role="status" aria-live="polite"></p>
     </main>
     <script type="module" src="popup.js"></script>

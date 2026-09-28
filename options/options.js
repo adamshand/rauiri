@@ -1,12 +1,13 @@
 import { TAB_GROUP_COLORS, cleanHostnameInput, routeForUrl } from "../src/domain.js";
 
 const COLOR_OPTIONS = TAB_GROUP_COLORS.map((color) => [color, `${color[0].toUpperCase()}${color.slice(1)}`]);
+const SWATCHES = {
+  grey: "#8d8d88", blue: "#4c7fa8", red: "#b6514b", yellow: "#c39836", green: "#668c69",
+  pink: "#b96885", purple: "#8067a0", cyan: "#3d8e94", orange: "#c47536",
+};
 
 const ui = {
   contexts: document.querySelector("#contexts"),
-  shortcutSettings: document.querySelector("#shortcut-settings"),
-  shortcutSlots: document.querySelector("#shortcut-slots"),
-  shortcutPool: document.querySelector("#shortcut-pool"),
   deleteDialog: document.querySelector("#delete-workspace-dialog"),
   deleteForm: document.querySelector("#delete-workspace-form"),
   deleteTitle: document.querySelector("#delete-workspace-title"),
@@ -19,7 +20,6 @@ const ui = {
   exportDeletion: document.querySelector("#export-workspace-deletion"),
   windowPreferences: document.querySelector("#window-preferences"),
   minimizeWorkspaces: document.querySelector("#minimize-workspaces"),
-  saveWindowPreferences: document.querySelector("#save-window-preferences"),
   exportGroupBackup: document.querySelector("#export-group-backup"),
   keyboardShortcuts: document.querySelector("#keyboard-shortcuts"),
   activateRoute: document.querySelector("#activate-route"),
@@ -49,6 +49,7 @@ const ui = {
   exportRecovery: document.querySelector("#export-recovery"),
   reopenRecovery: document.querySelector("#reopen-recovery"),
   status: document.querySelector("#status"),
+  connection: document.querySelector("#connection"),
 };
 
 let snapshot;
@@ -57,6 +58,15 @@ let draggedContextId = null;
 let deletingWorkspace = null;
 let recoveryRecords = [];
 const selectedRecoveryIds = new Set();
+let toastTimer;
+
+function notify(text, { pending = false, tone = "" } = {}) {
+  clearTimeout(toastTimer);
+  ui.status.textContent = text;
+  ui.status.dataset.tone = tone;
+  ui.status.toggleAttribute("data-visible", Boolean(text));
+  if (text && !pending) toastTimer = setTimeout(() => ui.status.removeAttribute("data-visible"), tone === "error" ? 8000 : 3500);
+}
 
 async function send(type, payload = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...payload });
@@ -90,7 +100,7 @@ async function load() {
 function render() {
   const windowMode = snapshot.mode === "windows";
   ui.windowPreferences.hidden = !windowMode;
-  ui.shortcutSettings.hidden = !windowMode;
+  ui.workspaces.closest("section").hidden = windowMode;
   ui.minimizeWorkspaces.checked = snapshot.minimizeOthers === true;
   ui.activateRouteLabel.hidden = !windowMode;
   ui.archiveHours.closest("section").hidden = windowMode;
@@ -98,25 +108,25 @@ function render() {
   ui.addContext.hidden = windowMode;
   ui.saveContexts.textContent = windowMode ? "Save workspaces" : "Save contexts";
   ui.workspaces.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Active workspaces have a window and enabled routes. Put-away workspaces retain their tabs, but have no window and inactive routes. Resume them explicitly."
+    ? "Active workspaces have a window and enabled routes. Put-away workspaces retain their tabs, but have no window and inactive routes."
     : "Save selected tabs from the popup for a client or task. Opening adds missing pages without closing tabs.";
   ui.routeForm.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Hostnames include all subdomains; the most specific hostname wins. Address-bar navigation follows you to the matching workspace. Other navigation files quietly unless you enable following. Cleanup moves always stay in the background; native pins are never automatically routed."
-    : "Hostnames include all subdomains; the most specific hostname wins. Routed sites stay out of automatic shelving.";
-  ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspace names & order" : "Contexts";
+    ? "Sites that always belong to one workspace. Typing an address takes you there; other navigation is filed quietly in the background. Each hostname includes its subdomains, the most specific match wins, and pinned tabs are never routed."
+    : "Sites that always belong to one context. Each hostname includes its subdomains, the most specific match wins, and routed sites stay out of automatic shelving.";
+  ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspaces" : "Contexts";
   ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Drag the handles to reorder, then Save workspaces. Keyboard: focus a handle and use Up/Down. List order is separate from your shortcut slots."
+    ? "Drag a handle onto a number to swap, or into Other active workspaces to free its number (or focus a handle and press Up/Down). Numbers save immediately; save name and colour edits below."
     : "Names, colours, and order map directly to Helium’s native groups.";
   renderContexts();
   renderContextSelect();
   renderRoutes();
   renderWorkspaces();
-  renderShortcuts();
   renderRecovery();
   // Window mode has no lifecycle settings; hidden number inputs still reject undefined.
   ui.archiveHours.value = windowMode ? "" : snapshot.settings.archiveAfterHours;
   ui.discardHours.value = windowMode ? "" : snapshot.settings.discardReadLaterAfterHours;
-  ui.status.textContent = snapshot.browserWarning || (snapshot.hasManagedWindow ? "Managed window connected" : "No managed window");
+  ui.connection.textContent = snapshot.browserWarning || (snapshot.hasManagedWindow ? (windowMode ? "Workspaces connected" : "Managed window connected") : "No managed window");
+  ui.connection.dataset.state = snapshot.browserWarning ? "warn" : snapshot.hasManagedWindow ? "ok" : "";
 }
 
 function beginWorkspaceDrag(event, id) {
@@ -142,59 +152,44 @@ function shortcutDropTarget(element, accepts, drop) {
   });
 }
 
-function assignShortcut(slot, workspaceId) {
-  perform("Saving shortcut…", async () => {
+async function assignShortcut(slot, workspaceId) {
+  const focusedId = document.activeElement?.closest(".context-row")?.dataset.id;
+  await perform("Saving shortcut…", async () => {
     await send("assignWorkspaceShortcut", { slot, workspaceId });
     await refreshSnapshot();
-  }, "Shortcut slots saved");
+  }, "Workspace numbers saved");
+  if (focusedId) [...ui.contexts.querySelectorAll(".context-row")].find((row) => row.dataset.id === focusedId)?.querySelector(".drag-handle").focus();
 }
 
-function renderShortcuts() {
-  if (snapshot.mode !== "windows") return;
+function renderWorkspaceList(rows) {
+  const byId = new Map(rows.map((row) => [row.dataset.id, row]));
   const active = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId !== null);
-  ui.shortcutSlots.replaceChildren(...snapshot.shortcutSlots.map((id, index) => {
-    const card = makeElement("div", "shortcut-card");
-    const heading = makeElement("div", "shortcut-heading");
-    const number = makeElement("strong", "", String(index + 1));
-    const handle = makeElement("span", "drag-handle", "⠿");
-    handle.draggable = Boolean(id);
-    handle.setAttribute("aria-label", `Drag workspace from slot ${index + 1}`);
-    handle.addEventListener("dragstart", (event) => {
-      if (!id) { event.preventDefault(); return; }
-      beginWorkspaceDrag(event, id);
-    });
-    handle.addEventListener("dragend", clearDrag);
-    heading.append(number, handle);
-    const select = document.createElement("select");
-    select.setAttribute("aria-label", `Workspace for shortcut ${index + 1}`);
-    const choices = active.filter((workspace) => workspace.id === id || workspace.shortcut === null);
-    select.replaceChildren(new Option("Empty", ""), ...choices.map((workspace) => new Option(workspace.title, workspace.id)));
-    select.value = id || "";
-    select.addEventListener("change", () => assignShortcut(index + 1, select.value || null));
-    shortcutDropTarget(card, (workspaceId) => active.some((workspace) => workspace.id === workspaceId),
-      (workspaceId) => assignShortcut(index + 1, workspaceId));
-    card.append(heading, select);
-    return card;
-  }));
-  const fixed = makeElement("div", "shortcut-card fixed-shortcut");
-  fixed.append(makeElement("strong", "", "0"), makeElement("span", "", "Read Later · fixed"));
-  ui.shortcutSlots.append(fixed);
-  ui.shortcutPool.replaceChildren(...active.filter((workspace) => workspace.shortcut === null).map((workspace) => {
-    const chip = makeElement("button", "quiet", workspace.title);
-    chip.type = "button";
-    chip.draggable = true;
-    chip.title = "Drag into a slot, or choose this workspace in a slot’s dropdown";
-    chip.addEventListener("dragstart", (event) => {
-      beginWorkspaceDrag(event, workspace.id);
-    });
-    chip.addEventListener("dragend", clearDrag);
-    return chip;
-  }));
-  if (!ui.shortcutPool.children.length) ui.shortcutPool.append(makeElement("span", "empty", "No unassigned active workspaces"));
+  const numbered = snapshot.shortcutSlots.map((id, index) => {
+    const row = byId.get(id) || makeElement("div", "empty-workspace");
+    if (!id) row.append(makeElement("span", "workspace-slot", String(index + 1)), makeElement("span", "empty", "Empty — drop a workspace here"));
+    row.dataset.slot = String(index + 1);
+    shortcutDropTarget(row, (id) => active.some((workspace) => workspace.id === id),
+      (id) => assignShortcut(index + 1, id));
+    return row;
+  });
+  const builtin = snapshot.workspaces.find((workspace) => workspace.builtin);
+  const other = makeElement("div", "other-workspaces");
+  other.append(makeElement("h3", "", "Other active workspaces"),
+    ...active.filter((workspace) => workspace.shortcut === null).map((workspace) => byId.get(workspace.id)));
+  other.append(makeElement("p", "empty", "Drop a numbered workspace here to leave its number empty."));
+  shortcutDropTarget(other, (id) => id && snapshot.shortcutSlots.includes(id),
+    (id) => assignShortcut(snapshot.shortcutSlots.indexOf(id) + 1, null));
+  const archived = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId === null);
+  const details = makeElement("details", "put-away-workspaces");
+  details.open = ui.contexts.querySelector("details")?.open === true;
+  details.append(makeElement("summary", "", `Put-away workspaces (${archived.length})`),
+    ...archived.map((workspace) => byId.get(workspace.id)));
+  details.hidden = !archived.length;
+  ui.contexts.replaceChildren(...numbered, byId.get(builtin.id), other, details);
 }
 
 function renderContexts() {
-  ui.contexts.replaceChildren(...contexts.map((context, index) => {
+  const rows = contexts.map((context, index) => {
     const row = ui.contextTemplate.content.firstElementChild.cloneNode(true);
     const workspace = snapshot.workspaces.find((item) => item.id === context.id);
     row.dataset.id = context.id;
@@ -208,11 +203,17 @@ function renderContexts() {
     const title = row.querySelector(".context-title");
     const color = row.querySelector(".context-color");
     const handle = row.querySelector(".drag-handle");
-    handle.setAttribute("aria-label", `Reorder ${context.title}. Use Up or Down arrow keys.`);
+    const windowMode = snapshot.mode === "windows";
+    handle.style.visibility = windowMode && (workspace.builtin || workspace.windowId === null) ? "hidden" : "";
+    handle.setAttribute("aria-label", `Move ${context.title}. Use Up or Down arrow keys.`);
     handle.addEventListener("keydown", (event) => {
       if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
-      moveContext(index, Math.max(0, Math.min(contexts.length - 1, index + (event.key === "ArrowUp" ? -1 : 1))));
+      if (windowMode) {
+        const slot = workspace.shortcut;
+        const next = slot === null ? (event.key === "ArrowUp" ? 9 : 1) : slot + (event.key === "ArrowUp" ? -1 : 1);
+        if (next >= 1 && next <= 9) assignShortcut(next, context.id);
+      } else moveContext(index, Math.max(0, Math.min(contexts.length - 1, index + (event.key === "ArrowUp" ? -1 : 1))));
     });
     handle.addEventListener("dragstart", (event) => {
       beginWorkspaceDrag(event, context.id);
@@ -220,14 +221,14 @@ function renderContexts() {
     });
     handle.addEventListener("dragend", clearDrag);
     row.addEventListener("dragover", (event) => {
-      if (!draggedContextId) return;
+      if (windowMode || !draggedContextId) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
       row.dataset.drop = event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2 ? "after" : "before";
     });
     row.addEventListener("dragleave", () => { delete row.dataset.drop; });
     row.addEventListener("drop", (event) => {
-      if (!draggedContextId) return;
+      if (windowMode || !draggedContextId) return;
       event.preventDefault();
       const from = contexts.findIndex((item) => item.id === draggedContextId);
       let to = index + (event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2 ? 1 : 0);
@@ -244,7 +245,11 @@ function renderContexts() {
       renderContextSelect();
     });
     color.replaceChildren(...COLOR_OPTIONS.map(([value, label]) => new Option(label, value, false, value === context.color)));
-    color.addEventListener("change", () => { context.color = color.value; });
+    row.style.setProperty("--swatch", SWATCHES[context.color] || SWATCHES.grey);
+    color.addEventListener("change", () => {
+      context.color = color.value;
+      row.style.setProperty("--swatch", SWATCHES[context.color] || SWATCHES.grey);
+    });
 
     const remove = row.querySelector(".remove");
     remove.disabled = builtin || contexts.length === 1;
@@ -262,8 +267,11 @@ function renderContexts() {
         renderContextSelect();
       }
     });
+    if (snapshot.mode === "windows") row.append(workspaceActions(workspace));
     return row;
-  }));
+  });
+  if (snapshot.mode === "windows") renderWorkspaceList(rows);
+  else ui.contexts.replaceChildren(...rows);
 }
 
 function clearDrag() {
@@ -278,7 +286,7 @@ function moveContext(from, to) {
   renderContexts();
   renderContextSelect();
   [...ui.contexts.children].find((row) => row.dataset.id === context.id)?.querySelector(".drag-handle").focus();
-  ui.status.textContent = "List order changed. Save when ready; shortcut slots are unchanged.";
+  notify("Order changed. Save when ready.");
 }
 
 function openDeleteDialog(id) {
@@ -340,15 +348,19 @@ function renderRoutes() {
       }
     }, "Route updated; existing tabs were not moved"));
     context.append(destination);
-    if (snapshot.mode === "windows") context.append(makeElement("span", "", route.active
-      ? route.activate ? "Active · follow navigation" : "Active · follow address bar only"
-      : "Inactive · workspace put away"));
+    if (snapshot.mode === "windows") {
+      const status = makeElement("span", "", route.active
+        ? route.activate ? "Follows all navigation" : "Follows the address bar"
+        : "Paused · workspace put away");
+      status.toggleAttribute("data-inactive", !route.active);
+      context.append(status);
+    }
     const remove = document.createElement("button");
     remove.className = "remove";
     remove.type = "button";
     remove.title = `Remove ${route.hostname}`;
     remove.setAttribute("aria-label", `Remove route for ${route.hostname}`);
-    remove.textContent = "×";
+    remove.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
     remove.addEventListener("click", () => perform("Removing route…", async () => {
       await send("removeRoute", { routeId: route.id });
       await refreshSnapshot();
@@ -358,13 +370,14 @@ function renderRoutes() {
   }));
 }
 
-function renderWorkspaces() {
-  if (snapshot.mode === "windows") {
-    ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace) => {
-      const row = makeElement("div", "workspace-row");
-      const label = makeElement("span", "", `${workspace.shortcut !== null ? `${workspace.shortcut} · ` : ""}${workspace.title} · ${workspace.windowId === null ? "Put away" : "Active"} · ${workspace.tabCount} remembered tabs`);
-      const open = makeElement("button", "quiet", workspace.restoring ? "Finish restoring" : workspace.windowId === null ? "Resume" : "Switch");
-      open.addEventListener("click", () => perform("Opening workspace…", () => send("focusWindowWorkspace", { workspaceId: workspace.id })));
+function workspaceActions(workspace) {
+      const row = makeElement("div", "workspace-actions");
+      const label = makeElement("span", "workspace-meta", `${workspace.builtin ? "Built in" : workspace.windowId === null ? "Put away" : "Active"} · ${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`);
+      const open = makeElement("button", "quiet small", workspace.restoring ? "Finish restoring" : workspace.windowId === null ? "Resume" : "Switch");
+      open.addEventListener("click", () => perform("Opening workspace…", async () => {
+        await send("focusWindowWorkspace", { workspaceId: workspace.id });
+        await refreshSnapshot();
+      }));
       const keepLabel = makeElement("label", "checkbox");
       keepLabel.hidden = workspace.windowId === null;
       const keep = document.createElement("input");
@@ -376,7 +389,7 @@ function renderWorkspaces() {
         await refreshSnapshot();
       }));
       keepLabel.append(keep, makeElement("span", "", "Pinned"));
-      const putAway = makeElement("button", "quiet", "Put away");
+      const putAway = makeElement("button", "quiet small", "Put away");
       putAway.hidden = workspace.builtin || workspace.windowId === null;
       putAway.addEventListener("click", () => {
         if (!window.confirm(`Put away “${workspace.title}”? Its window will close and its routes will pause. Web URLs, order and pins are saved, but unsaved forms, browser-internal pages and navigation history cannot be restored. Save any unfinished work first.`)) return;
@@ -386,10 +399,18 @@ function renderWorkspaces() {
         }, "Workspace put away; routes paused");
       });
       row.append(label, keepLabel, open, putAway);
+      for (const button of row.querySelectorAll("button")) button.type = "button";
+      if (!workspace.builtin && workspace.shortcut !== null) {
+        const clear = makeElement("button", "quiet small", "Remove number");
+        clear.type = "button";
+        clear.addEventListener("click", () => assignShortcut(workspace.shortcut, null));
+        row.append(clear);
+      }
       return row;
-    }));
-    return;
-  }
+}
+
+function renderWorkspaces() {
+  if (snapshot.mode === "windows") return;
   if (!snapshot.workspaces.length) {
     ui.workspaces.replaceChildren(makeElement("p", "empty", "No saved workspaces. Select tabs and save a workspace from the Rauiri popup."));
     return;
@@ -493,24 +514,20 @@ async function refreshRecovery() {
 }
 
 async function perform(label, task, successLabel = "Saved") {
-  ui.status.textContent = label;
+  notify(label, { pending: true });
   document.querySelectorAll("button, input, select").forEach((element) => { element.disabled = true; });
   try {
     const result = await task();
-    ui.status.textContent = typeof successLabel === "function" ? successLabel(result) : successLabel;
+    notify(typeof successLabel === "function" ? successLabel(result) : successLabel);
   } catch (error) {
-    ui.status.textContent = error.message;
+    notify(error.message, { tone: "error" });
   } finally {
     document.querySelectorAll("button, input, select").forEach((element) => { element.disabled = false; });
     renderContexts();
-    renderShortcuts();
     updateRecoveryActions();
     updateDeleteChoices();
   }
 }
-
-shortcutDropTarget(ui.shortcutPool, (id) => id && snapshot.shortcutSlots?.includes(id),
-  (id) => assignShortcut(snapshot.shortcutSlots.indexOf(id) + 1, null));
 
 ui.deleteTabs.addEventListener("change", updateDeleteChoices);
 ui.deleteRules.addEventListener("change", updateDeleteChoices);
@@ -589,7 +606,7 @@ ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", 
 }));
 
 ui.keyboardShortcuts.addEventListener("click", () => perform("Opening shortcut settings…", () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" })));
-ui.saveWindowPreferences.addEventListener("click", () => perform("Saving preferences…", () => send("setWorkspacePreferences", { minimizeOthers: ui.minimizeWorkspaces.checked })));
+ui.minimizeWorkspaces.addEventListener("change", () => perform("Saving preference…", () => send("setWorkspacePreferences", { minimizeOthers: ui.minimizeWorkspaces.checked })));
 ui.exportGroupBackup.addEventListener("click", () => perform("Exporting original backup…", async () => {
   downloadJson(await send("exportLegacyBackup"), "rauiri-original-groups.json");
 }, "Original group backup exported"));
@@ -630,7 +647,7 @@ ui.backupFile.addEventListener("change", async () => {
       return result;
     }, (result) => `Imported ${result.contexts} context${result.contexts === 1 ? "" : "s"}, ${result.routes} route${result.routes === 1 ? "" : "s"}, and ${result.records} saved tab record${result.records === 1 ? "" : "s"}`);
   } catch (error) {
-    ui.status.textContent = error instanceof SyntaxError ? "That file is not valid JSON." : error.message;
+    notify(error instanceof SyntaxError ? "That file is not valid JSON." : error.message, { tone: "error" });
   }
 });
 
@@ -644,16 +661,16 @@ ui.selectAllRecovery.addEventListener("click", () => {
 ui.copyRecovery.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(selectedRecoveryRecords().map((record) => record.url).join("\n"));
-    ui.status.textContent = "Copied selected URLs";
+    notify("Copied selected URLs");
   } catch {
-    ui.status.textContent = "Could not access the clipboard. Try Export JSON instead.";
+    notify("Could not access the clipboard. Try Export JSON instead.", { tone: "error" });
   }
 });
 
 ui.exportRecovery.addEventListener("click", () => {
   const exported = selectedRecoveryRecords().map(({ id, ...record }) => record);
   downloadJson(exported, `rauiri-recovery-${new Date().toISOString().slice(0, 10)}.json`);
-  ui.status.textContent = `Exported ${exported.length} saved page${exported.length === 1 ? "" : "s"}`;
+  notify(`Exported ${exported.length} saved page${exported.length === 1 ? "" : "s"}`);
 });
 
 ui.reopenRecovery.addEventListener("click", () => perform("Reopening saved tabs…", async () => {
@@ -666,4 +683,8 @@ ui.reopenRecovery.addEventListener("click", () => perform("Reopening saved tabs�
   return result;
 }, (result) => `Reopened ${result.reopened} tab${result.reopened === 1 ? "" : "s"}`));
 
-load().catch((error) => { ui.status.textContent = error.message; });
+load().catch((error) => {
+  ui.connection.textContent = "Unable to load";
+  ui.connection.dataset.state = "warn";
+  notify(error.message, { tone: "error" });
+});
