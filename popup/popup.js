@@ -22,7 +22,7 @@ const ui = {
   archivedSection: document.querySelector("#put-away-workspaces"),
   archivedList: document.querySelector("#put-away-list"),
   archivedSummary: document.querySelector("#put-away-summary"),
-  putAway: document.querySelector("#put-away-current"),
+  newWorkspaceToggle: document.querySelector("#new-workspace-toggle"),
   windowDestination: document.querySelector("#window-destination"),
   newWindowForm: document.querySelector("#new-window-workspace"),
   windowName: document.querySelector("#window-name"),
@@ -71,13 +71,12 @@ function render() {
   ui.headingTitle.textContent = "Rauiri";
   ui.windowPanel.hidden = !windowMode;
   ui.windowTrial.hidden = windowMode;
+  ui.newWorkspaceToggle.hidden = !windowMode;
   if (windowMode) {
     ui.setup.hidden = true;
     ui.workspace.hidden = true;
     const current = snapshot.workspaces.find((item) => item.id === snapshot.currentWorkspaceId);
     ui.headingTitle.textContent = current?.title || "Unassigned window";
-    ui.putAway.hidden = !current || current.builtin;
-    ui.putAway.textContent = current ? `Put away ${current.title}` : "Put away this workspace";
     document.documentElement.style.setProperty("--context", colors[current?.color] || colors.grey);
     ui.status.hidden = Boolean(current);
     ui.status.textContent = "This window is not assigned to a workspace";
@@ -313,13 +312,17 @@ ui.enableWindows.addEventListener("click", () => {
   if (!window.confirm("Move this window’s grouped tabs into separate workspace windows? Tabs stay open and an original-state backup is kept. Automatic shelving and group accordion behavior will be disabled in window mode.")) return;
   act("Creating workspace windows…", () => send("enableWindowWorkspaces", { windowId: currentWindow.id }));
 });
-ui.putAway.addEventListener("click", () => {
-  const current = snapshot.workspaces.find((workspace) => workspace.id === snapshot.currentWorkspaceId);
-  if (!current || current.builtin || !window.confirm(`Put away “${current.title}”? Its window will close and its routes will pause. Web URLs, order and pins are saved, but unsaved forms, browser-internal pages and navigation history cannot be restored. Save unfinished work first.`)) return;
-  act("Putting workspace away…", async () => {
-    await send("putAwayWorkspace", { workspaceId: current.id });
-    window.close();
-  });
+function setNewWorkspaceOpen(open) {
+  ui.newWindowForm.hidden = !open;
+  ui.newWorkspaceToggle.setAttribute("aria-expanded", String(open));
+  ui.newWorkspaceToggle.classList.toggle("active", open);
+  (open ? ui.windowName : ui.windowSearch).focus();
+}
+ui.newWorkspaceToggle.addEventListener("click", () => setNewWorkspaceOpen(ui.newWindowForm.hidden));
+ui.windowName.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || ui.windowName.value) return;
+  event.preventDefault();
+  setNewWorkspaceOpen(false);
 });
 ui.windowSearch.addEventListener("input", renderWindowList);
 ui.windowSearch.addEventListener("keydown", (event) => {

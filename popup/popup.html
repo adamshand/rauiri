@@ -12,6 +12,9 @@
       <header>
         <img class="brand-mark" src="../assets/icon-48.png" width="28" height="28" alt="">
         <h1 id="heading-title">Rauiri</h1>
+        <button id="new-workspace-toggle" class="icon-button" type="button" aria-label="New workspace" aria-expanded="false" aria-controls="new-window-workspace" title="New workspace" hidden>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
         <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Settings">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.6"/><circle cx="15" cy="17" r="2.6"/></svg>
         </button>
@@ -25,6 +28,11 @@
       </section>
 
       <section id="window-workspaces" hidden>
+        <form id="new-window-workspace" hidden>
+          <label class="visually-hidden" for="window-name">Workspace name</label>
+          <input id="window-name" autocomplete="off" placeholder="New workspace name…" required>
+          <button class="primary" type="submit">Create</button>
+        </form>
         <label class="search">
           <span class="visually-hidden">Find a workspace</span>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
@@ -41,21 +49,6 @@
             <span>Move tab to</span>
             <select id="window-destination"></select>
           </label>
-        </div>
-
-        <div class="footer-actions">
-          <details class="new-workspace">
-            <summary>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-              New workspace
-            </summary>
-            <form id="new-window-workspace">
-              <label class="visually-hidden" for="window-name">Workspace name</label>
-              <input id="window-name" autocomplete="off" placeholder="Client A, garden project…" required>
-              <button class="primary" type="submit">Create</button>
-            </form>
-          </details>
-          <button id="put-away-current" class="ghost" type="button" hidden>Put away this workspace</button>
         </div>
       </section>
 

@@ -25,7 +25,7 @@ body { margin: 0; width: 400px; max-height: 590px; overflow-y: auto; color: var(
 main { padding: 14px 14px 16px; }
 
 /* Header */
-header { display: flex; align-items: center; gap: 10px; min-height: 40px; margin-bottom: 12px; }
+header { display: flex; align-items: center; gap: 6px; min-height: 40px; margin-bottom: 12px; }
 .brand-mark { flex: none; border-radius: 7px; }
 h1 { flex: 1; min-width: 0; margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-heading h1 { display: flex; align-items: center; gap: 9px; }
@@ -100,16 +100,10 @@ kbd { grid-column: 3; grid-row: 1 / span 2; display: grid; place-items: center; 
 .move-tab { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
 .move-tab > span { color: var(--muted); font-size: 16px; white-space: nowrap; }
 
-.footer-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 6px; margin-top: 10px; }
-.new-workspace { flex: 1 1 auto; }
-.new-workspace[open] { flex-basis: 100%; }
-.new-workspace > summary { display: inline-flex; align-items: center; gap: 7px; min-height: 42px; padding: 0 12px; border-radius: 8px; list-style: none; font-weight: 600; }
-.new-workspace > summary::-webkit-details-marker { display: none; }
-.new-workspace > summary:hover { background: var(--hover); }
-.new-workspace[open] > summary { color: var(--muted); }
-#new-window-workspace { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 6px; }
-#put-away-current { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.new-workspace[open] ~ #put-away-current { display: none; }
+#new-window-workspace { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
+.icon-button.active { color: var(--ink); background: var(--selected); }
+.icon-button.active svg { transform: rotate(45deg); }
+.icon-button svg { transition: transform 120ms ease; }
 
 /* Legacy bucket mode */
 .bucket-switch { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 12px; }

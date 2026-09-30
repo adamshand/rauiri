@@ -115,7 +115,7 @@ function render() {
     : "Sites that always belong to one context. Each hostname includes its subdomains, the most specific match wins, and routed sites stay out of automatic shelving.";
   ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspaces" : "Contexts";
   ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Drag a handle onto a number to swap, or into Other active workspaces to free its number (or focus a handle and press Up/Down). Numbers save immediately; save name and colour edits below."
+    ? "Pick a shortcut number for each workspace; choosing a taken number swaps them. Numbers save immediately; save name and colour edits below."
     : "Names, colours, and order map directly to Helium’s native groups.";
   renderContexts();
   renderContextSelect();
@@ -135,57 +135,55 @@ function beginWorkspaceDrag(event, id) {
   event.dataTransfer.effectAllowed = "move";
 }
 
-function shortcutDropTarget(element, accepts, drop) {
-  element.addEventListener("dragover", (event) => {
-    if (!accepts(draggedContextId)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    element.classList.add("drop-target");
-  });
-  element.addEventListener("dragleave", () => element.classList.remove("drop-target"));
-  element.addEventListener("drop", (event) => {
-    const id = draggedContextId;
-    if (!accepts(id)) return;
-    event.preventDefault();
-    clearDrag();
-    drop(id);
-  });
-}
-
 async function assignShortcut(slot, workspaceId) {
   const focusedId = document.activeElement?.closest(".context-row")?.dataset.id;
   await perform("Saving shortcut…", async () => {
     await send("assignWorkspaceShortcut", { slot, workspaceId });
     await refreshSnapshot();
-  }, "Workspace numbers saved");
-  if (focusedId) [...ui.contexts.querySelectorAll(".context-row")].find((row) => row.dataset.id === focusedId)?.querySelector(".drag-handle").focus();
+  }, "Shortcut saved");
+  if (focusedId) [...ui.contexts.querySelectorAll(".context-row")].find((row) => row.dataset.id === focusedId)?.querySelector(".shortcut-select")?.focus();
+}
+
+// Numbers are fixed slots: picking one another workspace holds swaps the two.
+function shortcutSelect(workspace) {
+  if (workspace.builtin) {
+    const key = makeElement("span", "shortcut-fixed", "0");
+    key.title = "Read Later always uses Alt+0";
+    return key;
+  }
+  if (workspace.windowId === null) return makeElement("span", "shortcut-fixed", "");
+  const select = document.createElement("select");
+  select.className = "shortcut-select";
+  select.setAttribute("aria-label", `Shortcut number for ${workspace.title}`);
+  select.title = workspace.shortcut === null ? "No shortcut" : `Alt+${workspace.shortcut}`;
+  const titleOf = (id) => snapshot.workspaces.find((item) => item.id === id)?.title;
+  select.replaceChildren(new Option("—", ""), ...snapshot.shortcutSlots.map((id, index) => {
+    const occupant = id && id !== workspace.id ? titleOf(id) : null;
+    return new Option(occupant ? `${index + 1} · swap with ${occupant}` : String(index + 1), String(index + 1));
+  }));
+  select.value = workspace.shortcut === null ? "" : String(workspace.shortcut);
+  select.addEventListener("change", () => {
+    if (select.value) assignShortcut(Number(select.value), workspace.id);
+    else if (workspace.shortcut !== null) assignShortcut(workspace.shortcut, null);
+  });
+  return select;
 }
 
 function renderWorkspaceList(rows) {
   const byId = new Map(rows.map((row) => [row.dataset.id, row]));
-  const active = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId !== null);
-  const numbered = snapshot.shortcutSlots.map((id, index) => {
-    const row = byId.get(id) || makeElement("div", "empty-workspace");
-    if (!id) row.append(makeElement("span", "workspace-slot", String(index + 1)), makeElement("span", "empty", "Empty — drop a workspace here"));
-    row.dataset.slot = String(index + 1);
-    shortcutDropTarget(row, (id) => active.some((workspace) => workspace.id === id),
-      (id) => assignShortcut(index + 1, id));
-    return row;
-  });
-  const builtin = snapshot.workspaces.find((workspace) => workspace.builtin);
-  const other = makeElement("div", "other-workspaces");
-  other.append(makeElement("h3", "", "Other active workspaces"),
-    ...active.filter((workspace) => workspace.shortcut === null).map((workspace) => byId.get(workspace.id)));
-  other.append(makeElement("p", "empty", "Drop a numbered workspace here to leave its number empty."));
-  shortcutDropTarget(other, (id) => id && snapshot.shortcutSlots.includes(id),
-    (id) => assignShortcut(snapshot.shortcutSlots.indexOf(id) + 1, null));
+  // Keyboard order: 1–9, then 0 (Read Later), then unnumbered.
+  const rank = (workspace) => workspace.builtin ? 10 : workspace.shortcut ?? 11;
+  const active = snapshot.workspaces.filter((workspace) => workspace.builtin || workspace.windowId !== null)
+    .sort((a, b) => rank(a) - rank(b));
+  const header = makeElement("div", "workspace-header");
+  header.append(makeElement("span", "", "Key"), makeElement("span", "", "Colour"), makeElement("span", "", "Name"));
   const archived = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId === null);
   const details = makeElement("details", "put-away-workspaces");
   details.open = ui.contexts.querySelector("details")?.open === true;
   details.append(makeElement("summary", "", `Put-away workspaces (${archived.length})`),
     ...archived.map((workspace) => byId.get(workspace.id)));
   details.hidden = !archived.length;
-  ui.contexts.replaceChildren(...numbered, byId.get(builtin.id), other, details);
+  ui.contexts.replaceChildren(header, ...active.map((workspace) => byId.get(workspace.id)), details);
 }
 
 function renderContexts() {
@@ -193,27 +191,20 @@ function renderContexts() {
     const row = ui.contextTemplate.content.firstElementChild.cloneNode(true);
     const workspace = snapshot.workspaces.find((item) => item.id === context.id);
     row.dataset.id = context.id;
-    if (snapshot.mode === "windows") {
-      row.classList.add("workspace-context");
-      const shortcut = workspace?.shortcut;
-      const slot = makeElement("span", "workspace-slot", String(shortcut ?? "—"));
-      slot.setAttribute("aria-label", shortcut == null ? "No numbered shortcut" : `Shortcut slot ${shortcut}`);
-      row.prepend(slot);
-    }
     const title = row.querySelector(".context-title");
     const color = row.querySelector(".context-color");
     const handle = row.querySelector(".drag-handle");
     const windowMode = snapshot.mode === "windows";
-    handle.style.visibility = windowMode && (workspace.builtin || workspace.windowId === null) ? "hidden" : "";
+    if (windowMode) {
+      // Window mode has fixed numbered slots rather than a list order.
+      row.classList.add("workspace-context");
+      handle.replaceWith(shortcutSelect(workspace));
+    }
     handle.setAttribute("aria-label", `Move ${context.title}. Use Up or Down arrow keys.`);
     handle.addEventListener("keydown", (event) => {
       if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
-      if (windowMode) {
-        const slot = workspace.shortcut;
-        const next = slot === null ? (event.key === "ArrowUp" ? 9 : 1) : slot + (event.key === "ArrowUp" ? -1 : 1);
-        if (next >= 1 && next <= 9) assignShortcut(next, context.id);
-      } else moveContext(index, Math.max(0, Math.min(contexts.length - 1, index + (event.key === "ArrowUp" ? -1 : 1))));
+      moveContext(index, Math.max(0, Math.min(contexts.length - 1, index + (event.key === "ArrowUp" ? -1 : 1))));
     });
     handle.addEventListener("dragstart", (event) => {
       beginWorkspaceDrag(event, context.id);
@@ -267,7 +258,7 @@ function renderContexts() {
         renderContextSelect();
       }
     });
-    if (snapshot.mode === "windows") row.append(workspaceActions(workspace));
+    if (snapshot.mode === "windows") remove.before(workspaceActions(workspace));
     return row;
   });
   if (snapshot.mode === "windows") renderWorkspaceList(rows);
@@ -372,23 +363,7 @@ function renderRoutes() {
 
 function workspaceActions(workspace) {
       const row = makeElement("div", "workspace-actions");
-      const label = makeElement("span", "workspace-meta", `${workspace.builtin ? "Built in" : workspace.windowId === null ? "Put away" : "Active"} · ${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`);
-      const open = makeElement("button", "quiet small", workspace.restoring ? "Finish restoring" : workspace.windowId === null ? "Resume" : "Switch");
-      open.addEventListener("click", () => perform("Opening workspace…", async () => {
-        await send("focusWindowWorkspace", { workspaceId: workspace.id });
-        await refreshSnapshot();
-      }));
-      const keepLabel = makeElement("label", "checkbox");
-      keepLabel.hidden = workspace.windowId === null;
-      const keep = document.createElement("input");
-      keep.type = "checkbox";
-      keep.checked = workspace.pinned;
-      keep.setAttribute("aria-label", `Pin ${workspace.title} alongside other workspaces`);
-      keep.addEventListener("change", () => perform("Saving window preference…", async () => {
-        await send("setPinnedWorkspace", { workspaceId: keep.checked ? workspace.id : null });
-        await refreshSnapshot();
-      }));
-      keepLabel.append(keep, makeElement("span", "", "Pinned"));
+      const label = makeElement("span", "workspace-meta", `${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`);
       const putAway = makeElement("button", "quiet small", "Put away");
       putAway.hidden = workspace.builtin || workspace.windowId === null;
       putAway.addEventListener("click", () => {
@@ -398,14 +373,8 @@ function workspaceActions(workspace) {
           await refreshSnapshot();
         }, "Workspace put away; routes paused");
       });
-      row.append(label, keepLabel, open, putAway);
-      for (const button of row.querySelectorAll("button")) button.type = "button";
-      if (!workspace.builtin && workspace.shortcut !== null) {
-        const clear = makeElement("button", "quiet small", "Remove number");
-        clear.type = "button";
-        clear.addEventListener("click", () => assignShortcut(workspace.shortcut, null));
-        row.append(clear);
-      }
+      putAway.type = "button";
+      row.append(label, putAway);
       return row;
 }
 

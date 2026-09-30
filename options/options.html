@@ -17,31 +17,6 @@
     </header>
 
     <main>
-      <section id="window-preferences" hidden>
-        <div class="section-copy"><h2>Workspace windows</h2><p>Each workspace is its own window. Switching never closes tabs.</p></div>
-        <div class="section-body settings-list">
-          <label class="setting">
-            <span class="setting-copy"><strong>Minimise other workspaces when switching</strong><small>Keeps the dock tidy. The pinned workspace stays visible.</small></span>
-            <span class="switch"><input id="minimize-workspaces" type="checkbox" role="switch"><i aria-hidden="true"></i></span>
-          </label>
-          <div class="setting">
-            <span class="setting-copy"><strong>Keyboard shortcuts</strong><small>Alt+1–9 opens the numbered workspace below. Alt+0 is always Read Later.</small></span>
-            <button id="keyboard-shortcuts" class="quiet" type="button">Change bindings</button>
-          </div>
-          <div class="setting">
-            <span class="setting-copy"><strong>Pinned workspace</strong><small>Pin one workspace to keep it alongside the one you’re using. Pinning another replaces it. Pins don’t make windows always-on-top.</small></span>
-          </div>
-          <div class="setting">
-            <span class="setting-copy"><strong>Restore points</strong><small>Your tab groups from before window mode, and the last workspace you deleted.</small></span>
-            <span class="setting-actions">
-              <button id="export-group-backup" class="quiet" type="button">Original groups</button>
-              <button id="export-workspace-deletion" class="quiet" type="button">Last deletion</button>
-            </span>
-          </div>
-          <p class="note">A put-away workspace reopens its saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached from the popup.</p>
-        </div>
-      </section>
-
       <section>
         <div class="section-copy">
           <h2>Contexts</h2>
@@ -152,6 +127,33 @@
             <button id="reopen-recovery" class="primary" type="button" disabled>Reopen selected</button>
           </div>
         </div>
+      </section>
+
+      <section id="window-preferences" class="collapsible" hidden>
+        <details>
+        <summary class="section-copy"><h2>Workspace window options</h2><p>Minimising, keyboard bindings and restore points.</p></summary>
+        <div class="section-body settings-list">
+          <label class="setting">
+            <span class="setting-copy"><strong>Minimise other workspaces when switching</strong><small>Keeps the dock tidy. The pinned workspace stays visible.</small></span>
+            <span class="switch"><input id="minimize-workspaces" type="checkbox" role="switch"><i aria-hidden="true"></i></span>
+          </label>
+          <div class="setting">
+            <span class="setting-copy"><strong>Keyboard shortcuts</strong><small>Alt+1–9 opens the workspace with that number. Alt+0 is always Read Later.</small></span>
+            <button id="keyboard-shortcuts" class="quiet" type="button">Change bindings</button>
+          </div>
+          <div class="setting">
+            <span class="setting-copy"><strong>Pinned workspace</strong><small>Pin one workspace to keep it alongside the one you’re using. Pinning another replaces it. Pins don’t make windows always-on-top.</small></span>
+          </div>
+          <div class="setting">
+            <span class="setting-copy"><strong>Restore points</strong><small>Your tab groups from before window mode, and the last workspace you deleted.</small></span>
+            <span class="setting-actions">
+              <button id="export-group-backup" class="quiet" type="button">Original groups</button>
+              <button id="export-workspace-deletion" class="quiet" type="button">Last deletion</button>
+            </span>
+          </div>
+          <p class="note">A put-away workspace reopens its saved URLs and pins, but not unsaved forms or full page state. After a browser restart, unmatched windows can be attached from the popup.</p>
+        </div>
+        </details>
       </section>
 
       <footer>Everything stays on this device.</footer>
