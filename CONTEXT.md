@@ -28,17 +28,8 @@ Moving a workspace’s tabs and rules into another workspace, then removing the 
 **Background filing**:
 Assigning a page to its destination while keeping attention on the current work. Following the filed page is an explicit, separate choice.
 
-**Bucket**:
-The legacy broad category for pages, such as Personal, Haume, or Projects. Workspaces now cover both broad areas and particular client tasks.
-
-**Tab set**:
-A legacy, explicitly saved selection of page addresses. Unlike a live workspace, it does not automatically follow ongoing work.
-
 **Read Later**:
 The built-in workspace for pages intentionally set aside to read, permanently assigned to shortcut 0. It cannot be put away or deleted; age alone does not make a page reading material.
 
-**Inactive**:
-Unfinished browsing previously set aside because it had not been accessed recently. It is not necessarily reading material.
-
-**Recovery**:
-Previously known pages that can be explicitly reopened when their browsing session is missing. Recovery is not a complete reproduction of the original session.
+**Restore point**:
+A previous workspace configuration and page inventory retained before a potentially disruptive change. It preserves remembered pages, not a complete browser session.

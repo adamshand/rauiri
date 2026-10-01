@@ -9,10 +9,9 @@
   </head>
   <body>
     <main>
-      <header>
-        <img class="brand-mark" src="../assets/icon-48.png" width="28" height="28" alt="">
+      <header class="workspace-heading">
         <h1 id="heading-title">Rauiri</h1>
-        <button id="new-workspace-toggle" class="icon-button" type="button" aria-label="New workspace" aria-expanded="false" aria-controls="new-window-workspace" title="New workspace" hidden>
+        <button id="new-workspace-toggle" class="icon-button" type="button" aria-label="New workspace" aria-expanded="false" aria-controls="new-window-workspace" title="New workspace">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Settings">
@@ -20,14 +19,7 @@
         </button>
       </header>
       <p id="status" class="status">Finding your window…</p>
-
-      <section id="setup" class="card" hidden>
-        <p id="setup-copy">This window is outside Rauiri.</p>
-        <button id="adopt" class="primary" type="button">Manage this window</button>
-        <button id="focus-managed" class="secondary" type="button" hidden>Go to managed window</button>
-      </section>
-
-      <section id="window-workspaces" hidden>
+      <section>
         <form id="new-window-workspace" hidden>
           <label class="visually-hidden" for="window-name">Workspace name</label>
           <input id="window-name" autocomplete="off" placeholder="New workspace name…" required>
@@ -43,47 +35,8 @@
           <summary id="put-away-summary">Put-away workspaces</summary>
           <div id="put-away-list" class="window-list"></div>
         </details>
-
-        <div class="tab-tools">
-          <label class="move-tab">
-            <span>Move tab to</span>
-            <select id="window-destination"></select>
-          </label>
-        </div>
+        <div class="tab-tools"><label class="move-tab"><span>Move tab to</span><select id="window-destination"></select></label></div>
       </section>
-
-      <section id="workspace" hidden>
-        <label class="bucket-switch">
-          <span>Bucket</span>
-          <select id="active-context" name="active-context"></select>
-        </label>
-
-        <section class="card tab-actions" aria-label="Actions for this tab">
-          <p id="tab-location" class="tab-location" hidden></p>
-          <label class="move-tab">
-            <span>Move tab to</span>
-            <select id="tab-context" name="tab-context"></select>
-          </label>
-          <button id="read-later" class="secondary" type="button">Send to Read Later</button>
-        </section>
-
-        <details class="disclosure">
-          <summary>Client &amp; project tab sets</summary>
-          <p class="help">Save selected tabs as a named set—like “Client A”—and reopen missing pages later. No extra group, and no tabs closed. Cmd/Shift-click tabs before opening this popup to save a selection.</p>
-          <label class="field"><span>Tab set</span><select id="workspace-select" name="workspace-select"><option value="">New tab set…</option></select></label>
-          <label class="field"><span>Name</span><input id="workspace-name" name="workspace-name" autocomplete="off" placeholder="Client A, website rebuild…"></label>
-          <label class="field"><span>Save under</span><select id="workspace-context" name="workspace-context"></select></label>
-          <div class="button-row">
-            <button id="save-workspace" class="secondary" type="button">Save selected tabs</button>
-            <button id="open-workspace" class="primary" type="button" disabled>Open tab set</button>
-          </div>
-        </details>
-      </section>
-      <details id="window-trial" class="disclosure">
-        <summary>Try workspace windows</summary>
-        <p class="help">Each bucket becomes its own window, with real native pins. Switching keeps tabs alive. Existing groups in this window will be split into workspace windows; nothing is closed. An original-state backup is retained.</p>
-        <button id="enable-window-workspaces" class="primary" type="button">Use workspace windows</button>
-      </details>
       <p id="message" role="status" aria-live="polite"></p>
     </main>
     <script type="module" src="popup.js"></script>

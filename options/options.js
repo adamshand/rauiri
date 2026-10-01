@@ -1,659 +1,265 @@
-import { TAB_GROUP_COLORS, cleanHostnameInput, routeForUrl } from "../src/domain.js";
-
-const COLOR_OPTIONS = TAB_GROUP_COLORS.map((color) => [color, `${color[0].toUpperCase()}${color.slice(1)}`]);
-const SWATCHES = {
-  grey: "#8d8d88", blue: "#4c7fa8", red: "#b6514b", yellow: "#c39836", green: "#668c69",
-  pink: "#b96885", purple: "#8067a0", cyan: "#3d8e94", orange: "#c47536",
-};
-
-const ui = {
-  contexts: document.querySelector("#contexts"),
-  deleteDialog: document.querySelector("#delete-workspace-dialog"),
-  deleteForm: document.querySelector("#delete-workspace-form"),
-  deleteTitle: document.querySelector("#delete-workspace-title"),
-  deleteCopy: document.querySelector("#delete-workspace-copy"),
-  deleteTabs: document.querySelector("#delete-workspace-tabs"),
-  deleteRules: document.querySelector("#delete-workspace-rules"),
-  deleteDestination: document.querySelector("#delete-workspace-destination"),
-  deleteDestinationLabel: document.querySelector("#delete-destination-label"),
-  cancelDelete: document.querySelector("#cancel-workspace-delete"),
-  exportDeletion: document.querySelector("#export-workspace-deletion"),
-  windowPreferences: document.querySelector("#window-preferences"),
-  minimizeWorkspaces: document.querySelector("#minimize-workspaces"),
-  exportGroupBackup: document.querySelector("#export-group-backup"),
-  keyboardShortcuts: document.querySelector("#keyboard-shortcuts"),
-  activateRoute: document.querySelector("#activate-route"),
-  activateRouteLabel: document.querySelector("#activate-route-label"),
-  contextTemplate: document.querySelector("#context-template"),
-  addContext: document.querySelector("#add-context"),
-  saveContexts: document.querySelector("#save-contexts"),
-  routeForm: document.querySelector("#route-form"),
-  routeHost: document.querySelector("#route-host"),
-  routeContext: document.querySelector("#route-context"),
-  moveExisting: document.querySelector("#move-existing"),
-  routes: document.querySelector("#routes"),
-  workspaces: document.querySelector("#workspaces"),
-  archiveHours: document.querySelector("#archive-hours"),
-  discardHours: document.querySelector("#discard-hours"),
-  saveLifecycle: document.querySelector("#save-lifecycle"),
-  runSweep: document.querySelector("#run-sweep"),
-  importBackup: document.querySelector("#import-backup"),
-  exportBackup: document.querySelector("#export-backup"),
-  configurationOnly: document.querySelector("#configuration-only"),
-  exportPreviousBackup: document.querySelector("#export-previous-backup"),
-  backupFile: document.querySelector("#backup-file"),
-  recoveryCount: document.querySelector("#recovery-count"),
-  recoveryList: document.querySelector("#recovery-list"),
-  selectAllRecovery: document.querySelector("#select-all-recovery"),
-  copyRecovery: document.querySelector("#copy-recovery"),
-  exportRecovery: document.querySelector("#export-recovery"),
-  reopenRecovery: document.querySelector("#reopen-recovery"),
-  status: document.querySelector("#status"),
-  connection: document.querySelector("#connection"),
-};
-
+import { WORKSPACE_COLORS, cleanHostnameInput, routeForUrl } from "../src/domain.js";
+import { reconcileWorkspaceDrafts } from "../src/workspace-drafts.js";
+import { WORKSPACE_SWATCHES, send, element, disableControls } from "../src/ui.js";
+const ui = Object.fromEntries([
+  "workspaces", "workspace-template", "save-workspaces", "delete-workspace-dialog", "delete-workspace-form",
+  "delete-workspace-title", "delete-workspace-copy", "delete-workspace-tabs", "delete-workspace-rules",
+  "delete-workspace-destination", "delete-destination-label", "cancel-workspace-delete", "export-workspace-deletion",
+  "minimize-workspaces", "keyboard-shortcuts", "route-form", "route-host", "route-workspace", "move-existing",
+  "activate-route", "routes", "import-backup", "export-backup", "configuration-only", "export-previous-backup",
+  "export-reconnect-backup", "export-attach-backup", "backup-file", "status", "connection",
+].map((id) => [id, document.getElementById(id)]));
 let snapshot;
-let contexts = [];
-let draggedContextId = null;
-let deletingWorkspace = null;
-let recoveryRecords = [];
-const selectedRecoveryIds = new Set();
+let drafts = [];
+let deletingId = null;
+let busy = false;
 let toastTimer;
+let reconnectTimer;
 
-function notify(text, { pending = false, tone = "" } = {}) {
+function notify(text, { pending = false, error = false } = {}) {
   clearTimeout(toastTimer);
   ui.status.textContent = text;
-  ui.status.dataset.tone = tone;
+  ui.status.dataset.tone = error ? "error" : "";
   ui.status.toggleAttribute("data-visible", Boolean(text));
-  if (text && !pending) toastTimer = setTimeout(() => ui.status.removeAttribute("data-visible"), tone === "error" ? 8000 : 3500);
+  if (text && !pending) toastTimer = setTimeout(() => ui.status.removeAttribute("data-visible"), error ? 8000 : 3500);
 }
-
-async function send(type, payload = {}) {
-  const response = await chrome.runtime.sendMessage({ type, ...payload });
-  if (!response?.ok) throw new Error(response?.error || "Rauiri did not respond.");
-  return response.result;
-}
-
-function makeElement(tagName, className, textContent) {
-  const element = document.createElement(tagName);
-  if (className) element.className = className;
-  if (textContent !== undefined) element.textContent = textContent;
-  return element;
-}
-
 function downloadJson(value, filename) {
-  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
+  link.href = url;
   link.download = filename;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
-
-async function load() {
-  snapshot = await send("configurationSnapshot");
-  contexts = snapshot.contexts.map((context) => ({ ...context }));
-  render();
-  void refreshRecovery().catch((error) => { ui.recoveryCount.textContent = error.message; });
-}
-
-function render() {
-  const windowMode = snapshot.mode === "windows";
-  ui.windowPreferences.hidden = !windowMode;
-  ui.workspaces.closest("section").hidden = windowMode;
-  ui.minimizeWorkspaces.checked = snapshot.minimizeOthers === true;
-  ui.activateRouteLabel.hidden = !windowMode;
-  ui.archiveHours.closest("section").hidden = windowMode;
-  ui.recoveryList.closest("section").hidden = windowMode;
-  ui.addContext.hidden = windowMode;
-  ui.saveContexts.textContent = windowMode ? "Save workspaces" : "Save contexts";
-  ui.workspaces.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Active workspaces have a window and enabled routes. Put-away workspaces retain their tabs, but have no window and inactive routes."
-    : "Save selected tabs from the popup for a client or task. Opening adds missing pages without closing tabs.";
-  ui.routeForm.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Sites that always belong to one workspace. Typing an address takes you there; other navigation is filed quietly in the background. Each hostname includes its subdomains, the most specific match wins, and pinned tabs are never routed."
-    : "Sites that always belong to one context. Each hostname includes its subdomains, the most specific match wins, and routed sites stay out of automatic shelving.";
-  ui.contexts.closest("section").querySelector("h2").textContent = windowMode ? "Workspaces" : "Contexts";
-  ui.contexts.closest("section").querySelector(".section-copy p").textContent = windowMode
-    ? "Pick a shortcut number for each workspace; choosing a taken number swaps them. Numbers save immediately; save name and colour edits below."
-    : "Names, colours, and order map directly to Helium’s native groups.";
-  renderContexts();
-  renderContextSelect();
-  renderRoutes();
-  renderWorkspaces();
-  renderRecovery();
-  // Window mode has no lifecycle settings; hidden number inputs still reject undefined.
-  ui.archiveHours.value = windowMode ? "" : snapshot.settings.archiveAfterHours;
-  ui.discardHours.value = windowMode ? "" : snapshot.settings.discardReadLaterAfterHours;
-  ui.connection.textContent = snapshot.browserWarning || (snapshot.hasManagedWindow ? (windowMode ? "Workspaces connected" : "Managed window connected") : "No managed window");
-  ui.connection.dataset.state = snapshot.browserWarning ? "warn" : snapshot.hasManagedWindow ? "ok" : "";
-}
-
-function beginWorkspaceDrag(event, id) {
-  draggedContextId = id;
-  event.dataTransfer.setData("text/plain", id);
-  event.dataTransfer.effectAllowed = "move";
-}
-
-async function assignShortcut(slot, workspaceId) {
-  const focusedId = document.activeElement?.closest(".context-row")?.dataset.id;
-  await perform("Saving shortcut…", async () => {
-    await send("assignWorkspaceShortcut", { slot, workspaceId });
-    await refreshSnapshot();
-  }, "Shortcut saved");
-  if (focusedId) [...ui.contexts.querySelectorAll(".context-row")].find((row) => row.dataset.id === focusedId)?.querySelector(".shortcut-select")?.focus();
-}
-
-// Numbers are fixed slots: picking one another workspace holds swaps the two.
-function shortcutSelect(workspace) {
-  if (workspace.builtin) {
-    const key = makeElement("span", "shortcut-fixed", "0");
-    key.title = "Read Later always uses Alt+0";
-    return key;
+async function refreshSnapshot() {
+  const next = await send("snapshot");
+  drafts = reconcileWorkspaceDrafts(drafts, snapshot?.workspaces || [], next.workspaces);
+  snapshot = next;
+  if (deletingId && !snapshot.workspaces.some((workspace) => workspace.id === deletingId)) {
+    deletingId = null;
+    ui["delete-workspace-dialog"].close();
   }
-  if (workspace.windowId === null) return makeElement("span", "shortcut-fixed", "");
+  if (!busy) render();
+  clearTimeout(reconnectTimer);
+  if (snapshot.connecting) reconnectTimer = setTimeout(() => {
+    if (busy) return;
+    void refreshSnapshot().catch((error) => notify(error.message, { error: true }));
+  }, 200);
+}
+function render() {
+  renderWorkspaces();
+  renderWorkspaceSelect();
+  renderRoutes();
+  ui["minimize-workspaces"].checked = snapshot.minimizeOthers;
+  ui["save-workspaces"].disabled = ui["minimize-workspaces"].disabled = ui["import-backup"].disabled = !snapshot.browserReady;
+  ui["route-form"].querySelectorAll("button, input, select").forEach((node) => { node.disabled = !snapshot.browserReady; });
+  ui.connection.textContent = snapshot.browserWarning || (snapshot.connecting ? "Reconnecting windows…" : snapshot.hasManagedWindow ? "Workspaces connected" : "No assigned windows");
+  ui.connection.dataset.state = snapshot.browserWarning ? "warn" : snapshot.hasManagedWindow ? "ok" : "";
+  updateDeleteChoices();
+}
+function shortcutSelect(workspace) {
+  if (workspace.builtin || workspace.windowId === null) return element("span", "shortcut-fixed", workspace.builtin ? "0" : "");
   const select = document.createElement("select");
   select.className = "shortcut-select";
   select.setAttribute("aria-label", `Shortcut number for ${workspace.title}`);
-  select.title = workspace.shortcut === null ? "No shortcut" : `Alt+${workspace.shortcut}`;
-  const titleOf = (id) => snapshot.workspaces.find((item) => item.id === id)?.title;
+  select.disabled = !snapshot.browserReady;
   select.replaceChildren(new Option("—", ""), ...snapshot.shortcutSlots.map((id, index) => {
-    const occupant = id && id !== workspace.id ? titleOf(id) : null;
+    const occupant = id && id !== workspace.id ? snapshot.workspaces.find((item) => item.id === id)?.title : null;
     return new Option(occupant ? `${index + 1} · swap with ${occupant}` : String(index + 1), String(index + 1));
   }));
   select.value = workspace.shortcut === null ? "" : String(workspace.shortcut);
   select.addEventListener("change", () => {
-    if (select.value) assignShortcut(Number(select.value), workspace.id);
-    else if (workspace.shortcut !== null) assignShortcut(workspace.shortcut, null);
+    const slot = select.value ? Number(select.value) : workspace.shortcut;
+    void perform("Saving shortcut…", () => send("assignWorkspaceShortcut", { slot, workspaceId: select.value ? workspace.id : null }), "Shortcut saved");
   });
   return select;
 }
-
-function renderWorkspaceList(rows) {
-  const byId = new Map(rows.map((row) => [row.dataset.id, row]));
-  // Keyboard order: 1–9, then 0 (Read Later), then unnumbered.
-  const rank = (workspace) => workspace.builtin ? 10 : workspace.shortcut ?? 11;
-  const active = snapshot.workspaces.filter((workspace) => workspace.builtin || workspace.windowId !== null)
-    .sort((a, b) => rank(a) - rank(b));
-  const header = makeElement("div", "workspace-header");
-  header.append(makeElement("span", "", "Key"), makeElement("span", "", "Colour"), makeElement("span", "", "Name"));
-  const archived = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId === null);
-  const details = makeElement("details", "put-away-workspaces");
-  details.open = ui.contexts.querySelector("details")?.open === true;
-  details.append(makeElement("summary", "", `Put-away workspaces (${archived.length})`),
-    ...archived.map((workspace) => byId.get(workspace.id)));
-  details.hidden = !archived.length;
-  ui.contexts.replaceChildren(header, ...active.map((workspace) => byId.get(workspace.id)), details);
-}
-
-function renderContexts() {
-  const rows = contexts.map((context, index) => {
-    const row = ui.contextTemplate.content.firstElementChild.cloneNode(true);
-    const workspace = snapshot.workspaces.find((item) => item.id === context.id);
-    row.dataset.id = context.id;
-    const title = row.querySelector(".context-title");
-    const color = row.querySelector(".context-color");
-    const handle = row.querySelector(".drag-handle");
-    const windowMode = snapshot.mode === "windows";
-    if (windowMode) {
-      // Window mode has fixed numbered slots rather than a list order.
-      row.classList.add("workspace-context");
-      handle.replaceWith(shortcutSelect(workspace));
-    }
-    handle.setAttribute("aria-label", `Move ${context.title}. Use Up or Down arrow keys.`);
-    handle.addEventListener("keydown", (event) => {
-      if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
-      event.preventDefault();
-      moveContext(index, Math.max(0, Math.min(contexts.length - 1, index + (event.key === "ArrowUp" ? -1 : 1))));
+function renderWorkspaces() {
+  const open = ui.workspaces.querySelector("details")?.open === true;
+  const rows = new Map(drafts.map((draft) => {
+    const workspace = snapshot.workspaces.find((item) => item.id === draft.id);
+    const row = ui["workspace-template"].content.firstElementChild.cloneNode(true);
+    row.querySelector(".workspace-key").replaceWith(shortcutSelect(workspace));
+    const title = row.querySelector(".workspace-title");
+    title.value = draft.title;
+    title.disabled = workspace.builtin;
+    title.addEventListener("input", () => { draft.title = title.value; renderWorkspaceSelect(); });
+    const color = row.querySelector(".workspace-color");
+    color.replaceChildren(...WORKSPACE_COLORS.map((value) => new Option(`${value[0].toUpperCase()}${value.slice(1)}`, value, false, value === draft.color)));
+    row.style.setProperty("--swatch", WORKSPACE_SWATCHES[draft.color]);
+    color.addEventListener("change", () => { draft.color = color.value; row.style.setProperty("--swatch", WORKSPACE_SWATCHES[draft.color]); });
+    const actions = row.querySelector(".workspace-actions");
+    actions.append(element("span", "workspace-meta", `${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`));
+    const putAway = element("button", "quiet small", "Put away");
+    putAway.type = "button";
+    putAway.hidden = workspace.builtin || workspace.windowId === null;
+    putAway.disabled = !snapshot.browserReady;
+    putAway.addEventListener("click", () => {
+      if (!window.confirm(`Put away “${workspace.title}”? Its window will close and its routes will pause. Web URLs, order and pins are saved, but unsaved forms, internal pages and history cannot be restored. Save unfinished work first.`)) return;
+      void perform("Putting workspace away…", () => send("putAwayWorkspace", { workspaceId: workspace.id }), "Workspace put away; routes paused");
     });
-    handle.addEventListener("dragstart", (event) => {
-      beginWorkspaceDrag(event, context.id);
-      event.dataTransfer.setDragImage(row, 20, 20);
-    });
-    handle.addEventListener("dragend", clearDrag);
-    row.addEventListener("dragover", (event) => {
-      if (windowMode || !draggedContextId) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      row.dataset.drop = event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2 ? "after" : "before";
-    });
-    row.addEventListener("dragleave", () => { delete row.dataset.drop; });
-    row.addEventListener("drop", (event) => {
-      if (windowMode || !draggedContextId) return;
-      event.preventDefault();
-      const from = contexts.findIndex((item) => item.id === draggedContextId);
-      let to = index + (event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2 ? 1 : 0);
-      if (from < to) to--;
-      clearDrag();
-      if (from >= 0) moveContext(from, to);
-    });
-
-    const builtin = workspace?.builtin === true;
-    title.value = context.title;
-    title.disabled = builtin;
-    title.addEventListener("input", () => {
-      context.title = title.value;
-      renderContextSelect();
-    });
-    color.replaceChildren(...COLOR_OPTIONS.map(([value, label]) => new Option(label, value, false, value === context.color)));
-    row.style.setProperty("--swatch", SWATCHES[context.color] || SWATCHES.grey);
-    color.addEventListener("change", () => {
-      context.color = color.value;
-      row.style.setProperty("--swatch", SWATCHES[context.color] || SWATCHES.grey);
-    });
-
+    actions.append(putAway);
     const remove = row.querySelector(".remove");
-    remove.disabled = builtin || contexts.length === 1;
-    remove.title = builtin ? "Read Later is built in and cannot be deleted" : `Delete or merge ${context.title}`;
-    remove.setAttribute("aria-label", `Delete or merge ${context.title}`);
-    remove.addEventListener("click", () => {
-      if (snapshot.mode === "windows") {
-        perform("Checking workspace…", async () => {
-          await refreshSnapshot();
-          openDeleteDialog(context.id);
-        }, "Choose what to keep");
-      } else {
-        contexts.splice(index, 1);
-        renderContexts();
-        renderContextSelect();
-      }
-    });
-    if (snapshot.mode === "windows") remove.before(workspaceActions(workspace));
-    return row;
-  });
-  if (snapshot.mode === "windows") renderWorkspaceList(rows);
-  else ui.contexts.replaceChildren(...rows);
+    remove.disabled = workspace.builtin || !snapshot.browserReady;
+    remove.setAttribute("aria-label", `Delete or merge ${workspace.title}`);
+    remove.addEventListener("click", () => void perform("Checking workspace…", async () => {
+      await refreshSnapshot();
+      openDeleteDialog(workspace.id);
+    }, "Choose what to keep"));
+    return [draft.id, row];
+  }));
+  const rank = (workspace) => workspace.builtin ? 10 : workspace.shortcut ?? 11;
+  const active = snapshot.workspaces.filter((workspace) => workspace.builtin || workspace.windowId !== null).sort((a, b) => rank(a) - rank(b));
+  const archived = snapshot.workspaces.filter((workspace) => !workspace.builtin && workspace.windowId === null);
+  const header = element("div", "workspace-header");
+  header.append(element("span", "", "Key"), element("span", "", "Colour"), element("span", "", "Name"));
+  const details = element("details", "put-away-workspaces");
+  details.open = open;
+  details.hidden = !archived.length;
+  details.append(element("summary", "", `Put-away workspaces (${archived.length})`), ...archived.map((workspace) => rows.get(workspace.id)));
+  ui.workspaces.replaceChildren(header, ...active.map((workspace) => rows.get(workspace.id)), details);
 }
-
-function clearDrag() {
-  draggedContextId = null;
-  for (const row of ui.contexts.children) delete row.dataset.drop;
-  document.querySelectorAll(".drop-target").forEach((element) => element.classList.remove("drop-target"));
+function renderWorkspaceSelect() {
+  const selected = ui["route-workspace"].value;
+  ui["route-workspace"].replaceChildren(...drafts.map((workspace) => new Option(workspace.title, workspace.id)));
+  if (drafts.some((workspace) => workspace.id === selected)) ui["route-workspace"].value = selected;
 }
-
-function moveContext(from, to) {
-  const [context] = contexts.splice(from, 1);
-  contexts.splice(to, 0, context);
-  renderContexts();
-  renderContextSelect();
-  [...ui.contexts.children].find((row) => row.dataset.id === context.id)?.querySelector(".drag-handle").focus();
-  notify("Order changed. Save when ready.");
-}
-
-function openDeleteDialog(id) {
-  deletingWorkspace = snapshot.workspaces.find((workspace) => workspace.id === id);
-  if (!deletingWorkspace) throw new Error("This workspace no longer exists. Refresh Settings.");
-  const live = deletingWorkspace.windowId !== null;
-  const ruleCount = snapshot.routes.filter((route) => route.contextId === id).length;
-  ui.deleteTitle.textContent = `Delete “${deletingWorkspace.title}”?`;
-  ui.deleteCopy.textContent = live
-    ? "This workspace is active. Its live tabs and rules must move to another workspace; tabs will not be reloaded. A put-away destination will be resumed."
-    : `${deletingWorkspace.tabCount} remembered tabs and ${ruleCount} rules. Choose what to move or discard. Moving tabs to an active workspace opens them; a put-away destination stays put away.`;
-  ui.deleteTabs.value = live || deletingWorkspace.tabCount ? "move" : "delete";
-  ui.deleteRules.value = live || ruleCount ? "move" : "delete";
-  ui.deleteDestination.replaceChildren(new Option("Choose a workspace…", ""), ...snapshot.workspaces.filter((w) => w.id !== id).map((w) => new Option(w.title, w.id)));
-  updateDeleteChoices();
-  ui.deleteDialog.showModal();
-}
-
-function updateDeleteChoices() {
-  if (!deletingWorkspace) return;
-  const live = deletingWorkspace.windowId !== null;
-  ui.deleteTabs.disabled = live;
-  ui.deleteRules.disabled = live;
-  const needsDestination = live || ui.deleteTabs.value === "move" || ui.deleteRules.value === "move";
-  ui.deleteDestinationLabel.hidden = !needsDestination;
-  ui.deleteDestination.required = needsDestination;
-}
-
-function renderContextSelect() {
-  const selectedContextId = ui.routeContext.value;
-  ui.routeContext.replaceChildren(...contexts.map((context) => new Option(context.title, context.id)));
-  if (contexts.some((context) => context.id === selectedContextId)) {
-    ui.routeContext.value = selectedContextId;
-  }
-}
-
 function renderRoutes() {
   if (!snapshot.routes.length) {
-    const empty = makeElement("p", "empty", "No strict routes. Most sites should inherit their browsing context.");
-    ui.routes.replaceChildren(empty);
+    ui.routes.replaceChildren(element("p", "empty", "No strict routes. Most sites can stay in their current workspace."));
     return;
   }
-
   ui.routes.replaceChildren(...snapshot.routes.map((route) => {
-    const row = makeElement("div", "route-row");
-    const host = makeElement("code", "", route.hostname);
-    const context = makeElement("div", "route-destination");
+    const row = element("div", "route-row");
     const destination = document.createElement("select");
     destination.setAttribute("aria-label", `Destination for ${route.hostname}`);
-    destination.replaceChildren(...snapshot.contexts.map((item) => new Option(item.title, item.id)));
+    destination.replaceChildren(...snapshot.workspaces.map((workspace) => new Option(workspace.title, workspace.id)));
     destination.value = route.contextId;
-    destination.addEventListener("change", () => perform("Updating route…", async () => {
-      try {
-        await send("updateRouteDestination", { routeId: route.id, contextId: destination.value });
-        await refreshSnapshot();
-      } catch (error) {
-        destination.value = route.contextId;
-        throw error;
-      }
-    }, "Route updated; existing tabs were not moved"));
-    context.append(destination);
-    if (snapshot.mode === "windows") {
-      const status = makeElement("span", "", route.active
-        ? route.activate ? "Follows all navigation" : "Follows the address bar"
-        : "Paused · workspace put away");
-      status.toggleAttribute("data-inactive", !route.active);
-      context.append(status);
-    }
-    const remove = document.createElement("button");
-    remove.className = "remove";
+    destination.disabled = !snapshot.browserReady;
+    destination.addEventListener("change", () => void perform("Updating route…", () => send("updateRouteDestination", { routeId: route.id, contextId: destination.value }), "Route updated; existing tabs were not moved"));
+    const destinationCell = element("div", "route-destination");
+    const status = element("span", "", route.active ? route.activate ? "Follows all navigation" : "Follows the address bar" : "Paused · workspace put away");
+    status.toggleAttribute("data-inactive", !route.active);
+    destinationCell.append(destination, status);
+    const remove = element("button", "remove", "×");
     remove.type = "button";
-    remove.title = `Remove ${route.hostname}`;
+    remove.disabled = !snapshot.browserReady;
     remove.setAttribute("aria-label", `Remove route for ${route.hostname}`);
-    remove.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
-    remove.addEventListener("click", () => perform("Removing route…", async () => {
-      await send("removeRoute", { routeId: route.id });
-      await refreshSnapshot();
-    }));
-    row.append(host, context, remove);
+    remove.addEventListener("click", () => void perform("Removing route…", () => send("removeRoute", { routeId: route.id })));
+    row.append(element("code", "", route.hostname), destinationCell, remove);
     return row;
   }));
 }
-
-function workspaceActions(workspace) {
-      const row = makeElement("div", "workspace-actions");
-      const label = makeElement("span", "workspace-meta", `${workspace.tabCount} tab${workspace.tabCount === 1 ? "" : "s"}`);
-      const putAway = makeElement("button", "quiet small", "Put away");
-      putAway.hidden = workspace.builtin || workspace.windowId === null;
-      putAway.addEventListener("click", () => {
-        if (!window.confirm(`Put away “${workspace.title}”? Its window will close and its routes will pause. Web URLs, order and pins are saved, but unsaved forms, browser-internal pages and navigation history cannot be restored. Save any unfinished work first.`)) return;
-        perform("Putting workspace away…", async () => {
-          await send("putAwayWorkspace", { workspaceId: workspace.id });
-          await refreshSnapshot();
-        }, "Workspace put away; routes paused");
-      });
-      putAway.type = "button";
-      row.append(label, putAway);
-      return row;
+function openDeleteDialog(id) {
+  const workspace = snapshot.workspaces.find((item) => item.id === id);
+  if (!workspace) throw new Error("This workspace no longer exists.");
+  deletingId = id;
+  const live = workspace.windowId !== null;
+  const rules = snapshot.routes.filter((route) => route.contextId === id).length;
+  ui["delete-workspace-title"].textContent = `Delete “${workspace.title}”?`;
+  ui["delete-workspace-copy"].textContent = live
+    ? "Its live tabs and rules must move to another workspace without reloading. A put-away destination will be resumed."
+    : `${workspace.tabCount} remembered tabs and ${rules} rules. Choose what to move or discard. Moving tabs to an active workspace opens them; a put-away destination stays put away.`;
+  ui["delete-workspace-tabs"].value = live || workspace.tabCount ? "move" : "delete";
+  ui["delete-workspace-rules"].value = live || rules ? "move" : "delete";
+  ui["delete-workspace-destination"].replaceChildren(new Option("Choose a workspace…", ""), ...snapshot.workspaces.filter((item) => item.id !== id).map((item) => new Option(item.title, item.id)));
+  updateDeleteChoices();
+  ui["delete-workspace-dialog"].showModal();
 }
-
-function renderWorkspaces() {
-  if (snapshot.mode === "windows") return;
-  if (!snapshot.workspaces.length) {
-    ui.workspaces.replaceChildren(makeElement("p", "empty", "No saved workspaces. Select tabs and save a workspace from the Rauiri popup."));
-    return;
-  }
-  ui.workspaces.replaceChildren(...snapshot.workspaces.map((workspace) => {
-    const row = makeElement("div", "workspace-row");
-    const bucket = snapshot.contexts.find((context) => context.id === workspace.contextId)?.title || "Unknown bucket";
-    const label = makeElement("span", "", `${workspace.title} · ${bucket} · ${workspace.pages.length} pages`);
-    const open = makeElement("button", "quiet", "Open");
-    open.addEventListener("click", () => perform("Opening workspace…", () => send("openWorkspace", { workspaceId: workspace.id }),
-      (result) => `Opened ${result.opened} missing pages; existing tabs kept`));
-    const remove = makeElement("button", "quiet", "Delete");
-    remove.addEventListener("click", () => {
-      if (!window.confirm(`Delete saved workspace “${workspace.title}”? Open tabs stay open.`)) return;
-      perform("Deleting workspace…", async () => {
-        await send("deleteWorkspace", { workspaceId: workspace.id });
-        await refreshSnapshot();
-        renderWorkspaces();
-      });
-    });
-    row.append(label, open, remove);
-    return row;
-  }));
+function updateDeleteChoices() {
+  const workspace = snapshot?.workspaces.find((item) => item.id === deletingId);
+  if (!workspace) return;
+  const live = workspace.windowId !== null;
+  ui["delete-workspace-tabs"].disabled = ui["delete-workspace-rules"].disabled = live || busy;
+  const needsDestination = live || ui["delete-workspace-tabs"].value === "move" || ui["delete-workspace-rules"].value === "move";
+  ui["delete-destination-label"].hidden = !needsDestination;
+  ui["delete-workspace-destination"].required = needsDestination;
 }
-
-function selectedRecoveryRecords() {
-  return recoveryRecords.filter((record) => selectedRecoveryIds.has(record.id));
-}
-
-function updateRecoveryActions() {
-  const selectedCount = selectedRecoveryRecords().length;
-  const allSelected = recoveryRecords.length > 0 && selectedCount === recoveryRecords.length;
-  ui.selectAllRecovery.disabled = recoveryRecords.length === 0;
-  ui.selectAllRecovery.textContent = allSelected ? "Clear selection" : "Select all";
-  ui.copyRecovery.disabled = selectedCount === 0;
-  ui.exportRecovery.disabled = selectedCount === 0;
-  ui.reopenRecovery.disabled = selectedCount === 0;
-  ui.reopenRecovery.textContent = selectedCount ? `Reopen selected (${selectedCount})` : "Reopen selected";
-}
-
-function renderRecovery() {
-  const availableIds = new Set(recoveryRecords.map((record) => record.id));
-  for (const id of selectedRecoveryIds) {
-    if (!availableIds.has(id)) selectedRecoveryIds.delete(id);
-  }
-
-  ui.recoveryCount.textContent = recoveryRecords.length
-    ? `${recoveryRecords.length} stored page${recoveryRecords.length === 1 ? "" : "s"} not currently open`
-    : "No missing stored pages found";
-
-  if (!recoveryRecords.length) {
-    const empty = makeElement("p", "empty", "Rauiri’s saved records currently match the tabs in your browser.");
-    ui.recoveryList.replaceChildren(empty);
-    updateRecoveryActions();
-    return;
-  }
-
-  ui.recoveryList.replaceChildren(...recoveryRecords.map((record) => {
-    const row = makeElement("label", "recovery-row");
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = selectedRecoveryIds.has(record.id);
-    checkbox.setAttribute("aria-label", `Select ${record.title || record.url}`);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) selectedRecoveryIds.add(record.id);
-      else selectedRecoveryIds.delete(record.id);
-      updateRecoveryActions();
-    });
-
-    const page = makeElement("span", "recovery-page");
-    const title = makeElement("span", "recovery-title", record.title || "Untitled page");
-    title.title = title.textContent;
-    const url = makeElement("span", "recovery-url", record.url);
-    url.title = record.url;
-    page.append(title, url);
-
-    const meta = makeElement("span", "recovery-meta");
-    const location = makeElement("strong", "", record.attention === "readLater" ? "Read Later" : record.attention === "inactive" ? "Inactive" : record.contextTitle);
-    const seenAt = Number.isFinite(record.lastSeenAt)
-      ? new Date(record.lastSeenAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
-      : "Date unknown";
-    const seen = makeElement("span", "", seenAt);
-    meta.append(location, seen);
-
-    row.append(checkbox, page, meta);
-    return row;
-  }));
-  updateRecoveryActions();
-}
-
-async function refreshSnapshot() {
-  snapshot = await send("configurationSnapshot");
-  renderRoutes();
-  renderWorkspaces();
-}
-
-async function refreshRecovery() {
-  recoveryRecords = await send("recoverySnapshot");
-  renderRecovery();
-}
-
 async function perform(label, task, successLabel = "Saved") {
+  if (busy) return;
+  busy = true;
   notify(label, { pending: true });
-  document.querySelectorAll("button, input, select").forEach((element) => { element.disabled = true; });
+  const restoreControls = disableControls();
   try {
     const result = await task();
+    await refreshSnapshot();
     notify(typeof successLabel === "function" ? successLabel(result) : successLabel);
   } catch (error) {
-    notify(error.message, { tone: "error" });
+    notify(error.message, { error: true });
+    try { await refreshSnapshot(); } catch { /* Keep the last usable view. */ }
   } finally {
-    document.querySelectorAll("button, input, select").forEach((element) => { element.disabled = false; });
-    renderContexts();
-    updateRecoveryActions();
-    updateDeleteChoices();
+    busy = false;
+    restoreControls();
+    try { if (snapshot) render(); } catch (error) { notify(error.message, { error: true }); }
   }
 }
 
-ui.deleteTabs.addEventListener("change", updateDeleteChoices);
-ui.deleteRules.addEventListener("change", updateDeleteChoices);
-ui.cancelDelete.addEventListener("click", () => ui.deleteDialog.close());
-ui.deleteForm.addEventListener("submit", (event) => {
+ui["save-workspaces"].addEventListener("click", () => void perform("Saving workspaces…", async () => {
+  await send("saveWorkspaceDetails", { workspaces: drafts.map(({ id, title, color }) => ({ id, title, color })) });
+  drafts = [];
+}));
+ui["route-form"].addEventListener("submit", (event) => {
   event.preventDefault();
-  const id = deletingWorkspace.id;
-  const live = deletingWorkspace.windowId !== null;
-  const payload = { workspaceId: id, destinationId: ui.deleteDestination.value,
-    tabs: live ? "move" : ui.deleteTabs.value, rules: live ? "move" : ui.deleteRules.value };
-  perform("Deleting / merging workspace…", async () => {
+  void perform("Adding route…", async () => {
+    let moveExisting = ui["move-existing"].checked;
+    if (moveExisting) {
+      const current = await send("snapshot");
+      const hostname = cleanHostnameInput(ui["route-host"].value);
+      const routes = [...current.routes.filter((route) => cleanHostnameInput(route.hostname) !== hostname),
+        { id: "preview-route", hostname, contextId: ui["route-workspace"].value }]
+        .filter((route) => current.workspaces.some((workspace) => workspace.id === route.contextId && workspace.windowId !== null));
+      const windows = current.workspaces.map((workspace) => workspace.windowId).filter(Number.isInteger);
+      const tabs = (await Promise.all(windows.map((windowId) => chrome.tabs.query({ windowId })))).flat();
+      const count = tabs.filter((tab) => !tab.pinned && routeForUrl(routes, tab.url)?.id === "preview-route").length;
+      if (count) moveExisting = window.confirm(`Apply this route to up to ${count} existing matching tabs? Manual assignments are kept.`);
+    }
+    await send("addRoute", { hostname: ui["route-host"].value, contextId: ui["route-workspace"].value, moveExisting, activate: ui["activate-route"].checked });
+    ui["route-host"].value = "";
+  });
+});
+ui["delete-workspace-tabs"].addEventListener("change", updateDeleteChoices);
+ui["delete-workspace-rules"].addEventListener("change", updateDeleteChoices);
+ui["cancel-workspace-delete"].addEventListener("click", () => ui["delete-workspace-dialog"].close());
+ui["delete-workspace-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  const workspace = snapshot.workspaces.find((item) => item.id === deletingId);
+  if (!workspace) return;
+  const live = workspace.windowId !== null;
+  const payload = { workspaceId: deletingId, destinationId: ui["delete-workspace-destination"].value,
+    tabs: live ? "move" : ui["delete-workspace-tabs"].value, rules: live ? "move" : ui["delete-workspace-rules"].value };
+  void perform("Deleting / merging workspace…", async () => {
     await send("deleteWindowWorkspace", payload);
-    ui.deleteDialog.close();
-    contexts = contexts.filter((context) => context.id !== id);
-    await refreshSnapshot();
-    renderContextSelect();
+    deletingId = null;
+    ui["delete-workspace-dialog"].close();
   }, "Workspace removed. Last deletion backup is available.");
 });
-ui.exportDeletion.addEventListener("click", () => perform("Exporting deletion backup…", async () => {
-  downloadJson(await send("exportWorkspaceDeletionBackup"), "rauiri-before-workspace-deletion.json");
-}));
-
-ui.addContext.addEventListener("click", () => {
-  contexts.push({
-    id: `context-${crypto.randomUUID()}`,
-    title: "New context",
-    color: "blue",
-    order: contexts.length,
-  });
-  renderContexts();
-  renderContextSelect();
-  ui.contexts.lastElementChild?.querySelector("input")?.select();
-});
-
-ui.saveContexts.addEventListener("click", () => perform("Saving contexts…", async () => {
-  await send("saveContexts", { contexts });
-  await refreshSnapshot();
-  contexts = snapshot.contexts.map((context) => ({ ...context }));
-  renderContextSelect();
-}));
-
-ui.routeForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  let moveExisting = ui.moveExisting.checked;
-  if (moveExisting) {
-    const windowIds = snapshot.mode === "windows" ? snapshot.workspaces.map((item) => item.windowId).filter(Number.isInteger)
-      : Number.isInteger(snapshot.managedWindowId) ? [snapshot.managedWindowId] : [];
-    const pattern = cleanHostnameInput(ui.routeHost.value);
-    const routes = [...snapshot.routes.filter((route) => cleanHostnameInput(route.hostname) !== pattern), { id: "preview-route", hostname: pattern, contextId: ui.routeContext.value }]
-      .filter((route) => snapshot.mode !== "windows" || snapshot.workspaces.some((workspace) => workspace.id === route.contextId && workspace.windowId !== null));
-    const tabs = (await Promise.all(windowIds.map((windowId) => chrome.tabs.query({ windowId })))).flat();
-    const matching = tabs.filter((tab) => !tab.pinned && routeForUrl(routes, tab.url)?.id === "preview-route").length;
-    if (matching > 0) moveExisting = window.confirm(`Apply this route to up to ${matching} existing matching tabs? Manual assignments are kept.`);
-  }
-
-  perform("Adding route…", async () => {
-    await send("addRoute", {
-      hostname: ui.routeHost.value,
-      contextId: ui.routeContext.value,
-      moveExisting,
-      activate: ui.activateRoute.checked,
-    });
-    ui.routeHost.value = "";
-    await refreshSnapshot();
-  });
-});
-
-ui.saveLifecycle.addEventListener("click", () => perform("Saving lifecycle…", async () => {
-  await send("saveSettings", {
-    settings: {
-      archiveAfterHours: Number(ui.archiveHours.value),
-      discardReadLaterAfterHours: Number(ui.discardHours.value),
-    },
-  });
-  await refreshSnapshot();
-}));
-
-ui.keyboardShortcuts.addEventListener("click", () => perform("Opening shortcut settings…", () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" })));
-ui.minimizeWorkspaces.addEventListener("change", () => perform("Saving preference…", () => send("setWorkspacePreferences", { minimizeOthers: ui.minimizeWorkspaces.checked })));
-ui.exportGroupBackup.addEventListener("click", () => perform("Exporting original backup…", async () => {
-  downloadJson(await send("exportLegacyBackup"), "rauiri-original-groups.json");
-}, "Original group backup exported"));
-
-ui.runSweep.addEventListener("click", () => perform("Running sweep…", () => send("runSweep")));
-
-ui.exportBackup.addEventListener("click", () => perform("Preparing backup…", async () => {
-  const backup = await send("exportBackup", { configurationOnly: ui.configurationOnly.checked });
+ui["minimize-workspaces"].addEventListener("change", () => void perform("Saving preference…", () => send("setWorkspacePreferences", { minimizeOthers: ui["minimize-workspaces"].checked })));
+ui["keyboard-shortcuts"].addEventListener("click", () => void perform("Opening shortcut settings…", () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" })));
+for (const [id, type, filename] of [
+  ["export-previous-backup", "exportPreviousBackup", "rauiri-before-import.json"],
+  ["export-workspace-deletion", "exportWorkspaceDeletionBackup", "rauiri-before-workspace-deletion.json"],
+  ["export-reconnect-backup", "exportReconnectBackup", "rauiri-before-reconnect.json"],
+  ["export-attach-backup", "exportAttachBackup", "rauiri-before-attach.json"],
+]) ui[id].addEventListener("click", () => void perform("Preparing restore point…", async () => downloadJson(await send(type), filename), "Restore point exported"));
+ui["export-backup"].addEventListener("click", () => void perform("Preparing backup…", async () => {
+  const backup = await send("exportBackup", { configurationOnly: ui["configuration-only"].checked });
   downloadJson(backup, `rauiri-backup-${new Date().toISOString().slice(0, 10)}.json`);
-}, "Backup exported"));
-
-ui.exportPreviousBackup.addEventListener("click", () => perform("Preparing previous backup…", async () => {
-  downloadJson(await send("exportPreviousBackup"), "rauiri-before-import.json");
-}, "Pre-import backup exported"));
-
-ui.importBackup.addEventListener("click", () => {
-  ui.backupFile.value = "";
-  ui.backupFile.click();
-});
-
-ui.backupFile.addEventListener("change", async () => {
-  const [file] = ui.backupFile.files;
+  return backup;
+}, (backup) => backup.snapshot.fresh ? "Backup exported" : `Backup exported from saved state. ${backup.snapshot.reason}`));
+ui["import-backup"].addEventListener("click", () => { ui["backup-file"].value = ""; ui["backup-file"].click(); });
+ui["backup-file"].addEventListener("change", () => {
+  const [file] = ui["backup-file"].files;
   if (!file) return;
-
-  try {
+  void perform("Reading backup…", async () => {
     const backup = JSON.parse(await file.text());
-    const confirmed = window.confirm(
-      backup.format === "rauiri-window-workspaces"
-        ? "Import this workspace backup and enable window mode? All assigned workspace windows must be closed first. It will replace saved workspaces and routes, without opening or closing any tabs."
-        : "Import this backup? It will replace Rauiri’s contexts, routes, lifecycle settings, and saved recovery records. Open tabs will remain open and may be reorganized.",
-    );
-    if (!confirmed) return;
-
-    await perform("Importing backup…", async () => {
-      const result = await send("importBackup", { backup });
-      selectedRecoveryIds.clear();
-      await load();
-      return result;
-    }, (result) => `Imported ${result.contexts} context${result.contexts === 1 ? "" : "s"}, ${result.routes} route${result.routes === 1 ? "" : "s"}, and ${result.records} saved tab record${result.records === 1 ? "" : "s"}`);
-  } catch (error) {
-    notify(error instanceof SyntaxError ? "That file is not valid JSON." : error.message, { tone: "error" });
-  }
+    if (!window.confirm("Import this workspace backup? Put away all workspaces except Read Later first. Saved workspaces and routes will be replaced. Live Read Later tabs are kept and missing imported reading pages will open.")) return null;
+    const result = await send("importBackup", { backup });
+    drafts = [];
+    return result;
+  }, (result) => result ? `Imported ${result.workspaces} workspaces, ${result.routes} routes and ${result.tabs} remembered tabs` : "Import cancelled");
 });
-
-ui.selectAllRecovery.addEventListener("click", () => {
-  const allSelected = recoveryRecords.every((record) => selectedRecoveryIds.has(record.id));
-  selectedRecoveryIds.clear();
-  if (!allSelected) recoveryRecords.forEach((record) => selectedRecoveryIds.add(record.id));
-  renderRecovery();
-});
-
-ui.copyRecovery.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(selectedRecoveryRecords().map((record) => record.url).join("\n"));
-    notify("Copied selected URLs");
-  } catch {
-    notify("Could not access the clipboard. Try Export JSON instead.", { tone: "error" });
-  }
-});
-
-ui.exportRecovery.addEventListener("click", () => {
-  const exported = selectedRecoveryRecords().map(({ id, ...record }) => record);
-  downloadJson(exported, `rauiri-recovery-${new Date().toISOString().slice(0, 10)}.json`);
-  notify(`Exported ${exported.length} saved page${exported.length === 1 ? "" : "s"}`);
-});
-
-ui.reopenRecovery.addEventListener("click", () => perform("Reopening saved tabs…", async () => {
-  const currentWindow = await chrome.windows.getCurrent();
-  const result = await send("reopenRecords", {
-    recordIds: selectedRecoveryRecords().map((record) => record.id),
-    windowId: currentWindow.id,
-  });
-  await refreshRecovery();
-  return result;
-}, (result) => `Reopened ${result.reopened} tab${result.reopened === 1 ? "" : "s"}`));
-
-load().catch((error) => {
+void refreshSnapshot().catch((error) => {
   ui.connection.textContent = "Unable to load";
   ui.connection.dataset.state = "warn";
-  notify(error.message, { tone: "error" });
+  notify(error.message, { error: true });
 });

@@ -2,18 +2,20 @@
 
 ## Visual thesis
 
-A compact, quiet control sheet: warm paper-grey surfaces, ink typography, and context colour used only as a precise navigational signal.
+A compact, quiet control sheet: warm paper-grey surfaces, ink typography and workspace colour used as a precise navigational signal.
 
 ## Content plan
 
-1. Current context and managed-window status
-2. Current tab assignment and lifecycle actions
-3. Read Later count and settings access
+1. Current workspace or unassigned-window status
+2. Searchable active workspaces, followed by expandable put-away workspaces
+3. Background tab filing, workspace creation and Settings access
 
-The settings page uses one continuous column with dividers rather than dashboard cards.
+Settings groups workspace details, hostname routes, backups and window preferences. Fixed shortcut numbers replace draggable list ordering. Destructive actions use confirmation or a dialog.
 
 ## Interaction thesis
 
-- Context selection changes the edge marker and label immediately, making mode changes legible without animation noise.
-- Rows use short opacity/position transitions when state changes.
-- Buttons compress slightly on activation; destructive actions remain visually quiet until hovered.
+- Switching and pinning live in the popup and keyboard shortcuts; names, colours, shortcuts, put-away and merging live in Settings.
+- Pending startup is explicitly shown rather than presenting disconnected windows as ready for attachment.
+- Fresh snapshots reconcile workspace rows by identity without discarding unsaved name/colour edits.
+- Rows use short opacity/position transitions. Buttons compress slightly on activation.
+- Backup exports distinguish fresh browser inventories from previously saved state.

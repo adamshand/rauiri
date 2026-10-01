@@ -1,11 +1,11 @@
 {
   "name": "rauiri",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
-    "check": "node --check src/background.js && node --check src/window-workspaces.js && node --check src/domain.js && node --check popup/popup.js && node --check options/options.js && node scripts/validate-manifest.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/background.js && node --check src/window-workspaces.js && node --check src/domain.js && node --check src/workspace-drafts.js && node --check src/ui.js && node --check popup/popup.js && node --check options/options.js && node scripts/validate-manifest.js",
     "version:patch": "node scripts/bump-version.js",
     "hooks:install": "git config core.hooksPath .githooks"
   }

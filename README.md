@@ -2,102 +2,87 @@
 
 # Rauiri
 
-A personal Chromium extension for focused browsing and resumable client work. Designed for [Helium](https://helium.computer/), using standard Chromium APIs.
+A personal Chromium extension for focused browsing and resumable work. Designed for Helium, using standard Chromium APIs. Each workspace owns a persistent browser window; switching never closes or recreates its tabs.
 
 ## Load the extension
 
 1. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
-2. Select this repository and pin Rauiri’s extension icon to the toolbar.
-3. Open the popup in the browser window you want to manage.
+2. Select this repository and pin Rauiri’s icon to the toolbar.
+3. Open the popup. On a fresh installation, the focused normal window becomes **Personal**, preserving its tabs and native pins. Work, Groundtruth and Read Later are also available.
 
-## Live workspace windows — experimental
+Existing window-workspace configuration loads unchanged. The former tab-group workflow, automatic shelving, saved tab sets and group-backup support have been removed.
 
-In the popup, expand **Try workspace windows** and choose **Use workspace windows**. Migration is explicit: existing grouped tabs move into separate windows without being reloaded or closed. Native pinned tabs remain in the original window. Your old configuration and recovery records are retained; download the original group backup from Settings.
+## Everyday use
 
-An **active workspace** has an open browser window, live tabs, and enabled routes—even when minimised. A **put-away workspace** has no window; its tabs and rules are remembered, but its routes are inactive. The popup lists active workspaces first; put-away workspaces are expandable, and search includes both.
+- **Switch** focuses an existing workspace window. Put-away workspaces are resumed from their saved URLs and native pins.
+- **+** in the popup creates a new workspace and window.
+- Search includes active and put-away workspaces. **Enter** switches to the first available result; **Arrow Down** enters the results.
+- **Move tab to** files the current tab without following it. A local fallback keeps your attention in the source window. Choosing a put-away destination resumes it first.
+- Pin **one workspace** to keep it alongside the project you’re using. Pinning another replaces it and switches to its window. Closing or putting away the pinned workspace clears the pin.
+- Settings edits names and colours. Numbered shortcut assignments save immediately; choosing an occupied number swaps its occupants.
 
-- **Switch** focuses the existing window without recreating tabs. Project-to-project switches copy the outgoing normal window’s position and size. From the pinned base, they use the last live project’s geometry instead. The pinned base, maximised/full-screen windows, and manually selected windows are not resized; when switching from the pinned base with no visible project, Rauiri uses the last remembered project geometry (retained within the browser session). If no geometry is available, the destination keeps its own.
-- **+** (next to Settings in the popup) creates a new workspace in a separate window for a client, project, or personal area.
-- Tab URLs, order, titles, and pinning are remembered automatically. No repeated Save action.
-- **Move tab to** files it without following, keeping the source window alive and activating a local fallback when necessary. Explicitly choosing a put-away destination resumes that workspace first; the dropdown labels these destinations.
-- Pin **one workspace** from the popup to keep it alongside the one you’re using. Pin Personal for evening browsing, then pin Haume for work: the new pin replaces the old one and switches to its window. Click the selected pin again to clear it. Only active workspaces can be pinned. Putting away or closing the pinned window clears the workspace pin.
-- When **Minimise other workspaces when switching** is switched on under **Settings → Workspace window options** (it saves immediately), only the pinned and selected workspace windows are kept visible by Rauiri. Swapping the pin minimises the old base along with other inactive workspaces. Unrelated windows are never minimised; pins are not always-on-top. Numbered shortcuts keep their existing order.
-- Selecting or restoring a managed window through macOS follows the same switching rules as Rauiri’s hotkeys. Visiting the pinned base keeps your most recently used visible project alongside it; it does not reopen a project you manually minimised or closed. Unrelated windows and stale focus events are ignored.
-- The old **Keep available** preference migrates to this single pin. If several workspaces were exempt, the first in shortcut order becomes the pin; no tabs are moved or closed by this preference migration.
-- Only rules belonging to active workspaces participate in routing. A URL never wakes a put-away workspace; a broader active rule may still match. Resuming reactivates rules without sweeping up existing tabs elsewhere.
-- Address-bar navigation routes **and follows** when the tab is still foreground. Other navigation files quietly unless the rule enables following. Explicit filing and **Move existing matches** always stay in the background, even for follow rules. Background tabs and unfocused windows never initiate a focus switch.
-- Routing waits for top-level navigation metadata from Chromium’s `webNavigation` API (a new extension permission), rather than guessing from tab creation/history. Address-bar qualifiers and typed transitions identify deliberate visits; Helium’s reporting still needs real-world verification.
-- Hostname rules include the hostname itself and all its subdomains; the most specific hostname wins. For example, `haume.nz → Work` includes `musi.haume.nz`, unless `musi.haume.nz → Personal` overrides it (including its own subdomains). Wildcards are unnecessary and not accepted. Matching respects dot boundaries, so `nothaume.nz` does not match `haume.nz`. Native pins are never automatically routed. Manual assignment lasts until the URL changes or you deliberately navigate from the address bar.
+An **active workspace** has an open window and enabled routing rules, even when minimised. A **put-away workspace** retains its pages and rules but has no window and inactive rules. There is no automatic age-based shelving or closure.
 
-**Switching never closes tabs.** Choose **Put away** in Settings to save its tab inventory before closing its window. You must confirm first: only web URLs, titles, order and native pins are remembered, not unsaved forms, full application state, browser-internal pages or navigation history. Closing the window manually also puts it away using its last captured inventory. There is no automatic age-based closure. Resume explicitly from the popup’s search or put-away list. Resumed workspaces remain unassigned until you choose a shortcut slot.
+### Focus and geometry
 
-### Reorder, delete, or merge
+With **Minimise other workspaces when switching** enabled, Rauiri keeps the selected workspace and pin visible, leaving unrelated windows alone. Visiting the pin also keeps your most recently used visible project; it does not reopen one you minimised or closed.
 
-Settings has one **Workspaces** list: active workspaces in shortcut order (1–9, then **0 — Read Later**, then unnumbered), followed by expandable **Put-away workspaces**. Each row has a **Key** dropdown: choose a number to assign it, or **—** to clear it. Choosing a number another workspace holds swaps the two without renumbering the others. Number changes save immediately. Edit names and colours in the same rows, then **Save workspaces**. Putting away and deletion are there too; switching and pinning live in the popup and keyboard shortcuts.
+Project-to-project switches copy the outgoing normal window’s position and size. From the pin, they use the visible project’s geometry or the last remembered project bounds. The pin, maximised/full-screen windows and manually selected windows are not resized. Native window switching follows the same minimisation rules but never copies geometry.
+
+### Routing
+
+Hostname rules include subdomains, with the most specific active rule winning. `example.com → Work` includes `app.example.com`, unless a more specific rule overrides it. Lookalikes such as `notexample.com` do not match. Wildcards are unnecessary and not accepted.
+
+- Address-bar navigation routes **and follows** when the tab is foreground in the focused window.
+- Other navigation files quietly unless the rule enables following. Background tabs and unfocused windows never initiate focus switches.
+- Pinned tabs are never automatically routed.
+- Manual filing lasts until the URL changes or you deliberately navigate from the address bar, including across worker restarts.
+- Rules for put-away workspaces are inactive. A URL never resumes one; a broader active rule may still match.
+- **Move existing matches** stays in the background and preserves manual assignments.
+
+## Put away, delete or merge
+
+**Put away** in Settings requires confirmation and a successful fresh snapshot before closing its window. Only HTTP(S) URLs, titles, order and native pins are remembered—not forms, internal pages, navigation history or full application state. Save unfinished work first. Native window closure preserves the last complete captured inventory.
 
 The × button opens a deletion/merge dialog:
 
-- Active workspace: choose a destination. Its actual live tabs (including native pins) and rules move there before the source is removed. Tabs are not reloaded. A put-away destination is explicitly resumed for this operation.
-- Put-away workspace: independently choose whether to move or discard its remembered tabs and rules. Moving tabs to an active workspace opens them; merging into another put-away workspace opens no windows.
-- Read Later cannot be deleted, merged away, renamed, or put away. Failed live merges retain the source workspace for review; tabs already moved remain at the destination.
-- **Workspace window options → Restore points → Last deletion** downloads the pre-deletion workspace state. Only the latest deletion/merge backup is retained; export it before another deletion if needed. Import uses the normal backup import flow (put away all workspaces except Read Later).
+- Active workspace: move its live tabs and rules to another workspace without reloading. A put-away destination is resumed.
+- Put-away workspace: independently move or discard its remembered tabs and rules. Moving pages to an active destination opens them; a put-away destination stays put away.
+- Failed live merges retain the source for review; already moved tabs remain at the destination.
+- Read Later cannot be renamed, put away, deleted or merged away.
 
-### Keyboard switching
+## Keyboard switching
 
-Default shortcuts (`Alt` is Option on macOS):
+`Alt` is Option on macOS:
 
-- **Option/Alt+Shift+Space**: open the popup with search focused. Type, then Enter to switch to the first available result; Arrow Down enters the results.
-- **Option/Alt+Shift+P**: toggle back to the previous active workspace, including switches made using native window controls.
-- **Option/Alt+1 / +2**: switch to the workspace assigned to slot 1/2.
+- **Alt+Shift+Space**: popup with search focused.
+- **Alt+Shift+P**: previous active workspace, including native window switches.
+- **Alt+1 / +2**: workspace in shortcut slot 1/2.
 
-Commands for slots **3–9 and 0** are also available: assign Option/Alt+3 through +9 and +0 in **Settings → Workspace window options → Change bindings** (`chrome://extensions/shortcuts`). Chromium permits only four default assignments and does not support backtick as an extension command key. OS/browser conflicts may require rebinding defaults there too.
+Bind slots **3–9 and 0** through **Settings → Workspace window options → Change bindings**. Chromium permits only four default assignments. Empty slots do nothing. Putting away, closing or deleting a workspace clears only its slot; creating or explicitly resuming one leaves it unnumbered. Native browser-session restoration can restore its previous number when the window reconnects.
 
-Numbered rows **1–9** stay fixed; there is no separate editable workspace order in window mode. Empty slots do nothing. Putting away, closing or deleting a workspace clears only its slot; creating or explicitly resuming one leaves it unassigned. Native browser-session restoration can restore the previous assignments when its workspace windows reconnect. Existing active assignments 1–9 migrate in place; Read Later moves to 0, leaving its former slot empty. Slots are shown beside workspace names in both the popup and Settings. Shortcuts other than opening the popup are inactive in legacy group mode.
+**Slot 0 always opens Read Later.** Closing it manually recreates its window in the background from remembered pages. Rauiri waits for batches of closing windows and does not create it when no normal non-private windows remain, to avoid fighting browser shutdown.
 
-### Built-in Read Later
+## Restart and recovery
 
-**Slot 0 always opens Read Later.** Configure Option/Alt+0 in browser shortcut settings if it is not already bound. Read Later always exists, cannot occupy another slot, and cannot be put away, deleted, merged away or renamed. It can be minimised normally and is not automatically the workspace pin.
+Session storage retains window associations across worker restarts. Browser restart or extension reload clears those IDs, so Rauiri reconnects by URL overlap: at least half, with the workspace and window each being the other’s clear best match. Ties remain unassigned. An interrupted Rauiri restore keeps its full inventory and resumes only missing pages.
 
-If its window closes manually, Rauiri recreates it in the background from its remembered tabs. It waits for batches of closing windows and does not create a window when no normal non-private browser windows remain, so it does not deliberately fight browser shutdown. It becomes available again on startup or when a new normal browser window opens. Reopening preserves URLs/pins, not unsaved page state.
+Windows arriving later can relink when they have at least two web pages, so a single torn-off tab cannot claim a workspace through the delayed reconnect path. Don’t resume an apparently put-away workspace while the browser is still restoring it. If matching is ambiguous, open the popup in the restored window and choose **Use this window**.
 
-### Restart and recovery
+## Backups
 
-Runtime window associations are stored in session storage, which the browser clears on restart and whenever the extension is reloaded or updated. Rauiri then reconnects each workspace to the window sharing most of its saved web pages (at least half, by overlap), and only when that workspace and window are each other's clear best match; ties stay unassigned. It never guesses from a single overlapping page. When a match is not exact, the pre-reconnect state is kept locally as `rauiriBeforeReconnect` before the live tabs replace the saved list. A workspace that fails to reconnect keeps a claim on its shortcut number. If matching is ambiguous or restoration is incomplete, open the popup in the restored window and choose **Use this window** for its workspace; this restores its shortcut number, and the previous tab list is retained as `savedBeforeAttach`. Rauiri never opens a second copy of a workspace whose window is still open: resuming it, filing a tab into it, or recreating Read Later first relinks a clearly matching open window. Windows that appear later (for example while the browser restores its session) are relinked the same way when they have at least two web pages, so a single torn-off tab never claims a workspace.
+- Full backups include remembered workspace URLs, pins and routing overrides. Keep them private: URLs can contain client details or access tokens.
+- Configuration-only backups exclude all saved page lists, including retained attach inventories.
+- Full exports capture current windows when the browser is idle. If startup, an operation, a read failure or a snapshot timeout prevents this, the export explicitly reports that it uses saved state. Settings and exports do not depend on browser startup completing.
+- Import validates before replacement. Put away all workspaces except Read Later first. Its live tabs are preserved and missing imported reading URLs are opened. Other imported workspaces stay put away and unnumbered.
+- Restore points cover the last import, deletion/merge, inexact reconnect and manual attachment. Download them from Settings before another operation replaces the relevant point.
+- Existing window-workspace backups remain supported; unrelated historical fields are ignored. Old group-format backups are not supported.
 
-Do not resume a put-away-looking workspace if the browser is still restoring it—wait or attach the restored window instead. Routing remains inactive until a window is associated with that workspace.
-
-### Backups
-
-- Full window-workspace backups include saved URLs, pins, routes, and legacy recovery data. URLs can contain private client information or access tokens; keep these files private.
-- Configuration-only backups retain workspace names and rules but omit all saved page lists and legacy records.
-- Import validates first. Put away other workspaces before replacement; Read Later can remain open. Its current live tabs are preserved and missing imported Read Later URLs are opened. Other imported workspaces remain put away and unassigned. Fresh installations can import window-workspace backups directly; the built-in Read Later window is made available automatically.
-- Settings offers a pre-import backup and the original group-mode backup. The legacy Recovery panel is hidden in window mode; its records remain in the original/full backups.
-- Only HTTP(S) pages are saved for resumption. Browser-internal pages, extension pages, forms, and navigation history are not session backups.
-
-### Current limitations
-
-- Workspace names appear in Rauiri, not as custom OS window titles.
-- There is no nested workspace hierarchy yet; naming and search keep the list manageable.
-- Automatic Read Later/Inactive sweeping is paused in window mode. Existing shelves become named workspaces so their live tabs are preserved.
-- A timed-out browser edit is not replayed. Mutations wait for its result; Settings and exports remain accessible. A permanently unresponsive browser API can still require reloading the extension.
-- Minimise and focus behavior has been smoke-tested in Chromium; Helium/macOS dogfooding remains important.
-
-## Original group mode
-
-Until you enable window workspaces, Rauiri keeps the original single-window workflow:
-
-- **Manage this window** puts ordinary tabs in Personal and preserves existing recovery records.
-- Broad buckets use accordion tab groups. **Move tab to** files the current tab elsewhere.
-- Native pins are global within that one window.
-- **Client & project tab sets** are explicit saved URL snapshots, not live workspaces.
-- Automatic shelving sends eligible tabs to Inactive after 72 idle hours. Read Later is intentional reading; both shelves unload idle tabs after two hours. Active, audible, pinned, and strictly routed tabs are excluded from automatic shelving.
-- Settings includes backup import/export and missing-page Recovery. Rauiri never closes tabs automatically.
-
-Window mode disables the old group controller rather than running both systems concurrently. The original state is retained separately; migration does not automatically rewrite or delete it.
+A permanently unresponsive browser API can still require reloading the extension. Minimise and focus behavior should continue to be dogfooded in Helium/macOS.
 
 ## Development
 
-Browser-native JavaScript modules; no build step.
+Browser-native JavaScript modules; no build step or dependencies.
 
 ```sh
 npm run hooks:install
@@ -105,16 +90,12 @@ npm test
 npm run check
 ```
 
-The tracked pre-commit hook patch-bumps `manifest.json` and `package.json` together for extension changes. After changing files, reload Rauiri in `chrome://extensions`.
+The pre-commit hook patch-bumps `manifest.json` and `package.json` together for extension changes. After changes, reload Rauiri in `chrome://extensions` and reopen its popup/Settings.
 
-## Project files
-
-- [`src/window-workspaces.js`](src/window-workspaces.js) — live-window ownership, tracking, routing, and backup boundary
-- [`src/background.js`](src/background.js) — message dispatch and legacy group orchestration
-- [`src/domain.js`](src/domain.js) — legacy classification, lifecycle, and backup rules
-- [`popup/`](popup/) — workspace switcher and tab actions
-- [`options/`](options/) — workspace names, routes, preferences, and backups
-- [`test/`](test/) — domain and mocked-browser regression tests
+- [`src/window-workspaces.js`](src/window-workspaces.js) — window ownership, routing, persistence and backups
+- [`src/background.js`](src/background.js) — trusted message boundary
+- [`src/domain.js`](src/domain.js) — hostname matching, URL validation and workspace colours
+- [`src/workspace-drafts.js`](src/workspace-drafts.js) — reconciliation of unsaved Settings edits
 - [`CONTEXT.md`](CONTEXT.md) — product vocabulary
-- [`docs/adr/0001-live-workspace-windows.md`](docs/adr/0001-live-workspace-windows.md) — why live workspaces use separate windows
-- [`docs/PLAN.md`](docs/PLAN.md) — original group prototype and subsequent direction
+- [`docs/PLAN.md`](docs/PLAN.md) — scope and safety contract
+- [`docs/adr/`](docs/adr/) — architectural decisions

@@ -1,4 +1,4 @@
-import { cleanHostnameInput, isRoutableUrl, isValidRouteHostname, routeForUrl, TAB_GROUP_COLORS, createBackup, stateFromBackup } from "./domain.js";
+import { cleanHostnameInput, isRoutableUrl, isValidRouteHostname, routeForUrl, WORKSPACE_COLORS } from "./domain.js";
 
 const KEY = "rauiriWindowWorkspaces";
 const SESSION_KEY = "rauiriWorkspaceWindows";
@@ -7,8 +7,28 @@ const PROJECT_BOUNDS_KEY = "rauiriProjectBounds";
 const FORMAT = "rauiri-window-workspaces";
 const READ_LATER = "read-later";
 const BEFORE_RECONNECT_KEY = "rauiriBeforeReconnect";
+const RESTORE_KEYS = {
+  exportWorkspaceDeletionBackup: "rauiriBeforeWorkspaceDelete",
+  exportPreviousBackup: "rauiriBeforeWorkspaceImport",
+  exportReconnectBackup: BEFORE_RECONNECT_KEY,
+  exportAttachBackup: "rauiriBeforeWorkspaceAttach",
+};
+const isMissingWindow = (error) => /no window|not found/i.test(error.message);
 // Share of pages (intersection over union) a window needs with a saved workspace.
 const RECONNECT_OVERLAP = 0.5;
+
+export function createWindowState() {
+  return {
+    version: 1, minimizeOthers: true, pinnedWorkspaceId: null,
+    shortcutSlots: Array(9).fill(null), closedShortcutSlots: Array(9).fill(null), routes: [],
+    workspaces: [
+      { id: "personal", title: "Personal", color: "green", tabs: [] },
+      { id: "work", title: "Work", color: "red", tabs: [] },
+      { id: "groundtruth", title: "Groundtruth", color: "orange", tabs: [] },
+      { id: READ_LATER, title: "Read Later", color: "grey", tabs: [] },
+    ],
+  };
+}
 
 // Multiset overlap of two URL lists: shared pages over all distinct page slots.
 export function pageOverlap(saved, live) {
@@ -37,8 +57,7 @@ export function validateWindowState(value) {
   const ids = new Set();
   for (const workspace of value.workspaces) {
     if (!workspace || typeof workspace.id !== "string" || !workspace.id || ids.has(workspace.id)
-      || typeof workspace.title !== "string" || !workspace.title.trim() || !TAB_GROUP_COLORS.includes(workspace.color)
-      || (workspace.keepAvailable !== undefined && typeof workspace.keepAvailable !== "boolean")
+      || typeof workspace.title !== "string" || !workspace.title.trim() || !WORKSPACE_COLORS.includes(workspace.color)
       || !Array.isArray(workspace.tabs)) throw new Error("Invalid workspace in backup.");
     ids.add(workspace.id);
     for (const tab of workspace.tabs) {
@@ -53,11 +72,7 @@ export function validateWindowState(value) {
       || typeof route.activate !== "boolean") throw new Error("Invalid workspace route.");
     routeIds.add(route.id);
   }
-  // Older backups allowed multiple minimisation exemptions. Keep the first in
-  // workspace order as the single pin; an explicit null means no pin.
-  const pinnedWorkspaceId = value.pinnedWorkspaceId === undefined
-    ? value.workspaces.find((workspace) => workspace.keepAvailable)?.id || null
-    : value.pinnedWorkspaceId;
+  const pinnedWorkspaceId = value.pinnedWorkspaceId ?? null;
   if (pinnedWorkspaceId !== null && !ids.has(pinnedWorkspaceId)) throw new Error("Invalid pinned workspace.");
   const shortcutSlots = value.shortcutSlots === undefined
     ? Array.from({ length: 9 }, (_, index) => value.workspaces[index]?.id === READ_LATER ? null : value.workspaces[index]?.id || null)
@@ -67,9 +82,14 @@ export function validateWindowState(value) {
   // slots when startup actually reconnects those windows; explicit resume clears them.
   const closedShortcutSlots = value.closedShortcutSlots === undefined ? Array(9).fill(null) : value.closedShortcutSlots;
   validateShortcutSlots(closedShortcutSlots, ids, "Invalid closed workspace shortcuts.");
-  const workspaces = value.workspaces.map(({ keepAvailable, ...workspace }) => workspace.id === READ_LATER ? { ...workspace, title: "Read Later" } : workspace);
+  const workspaces = value.workspaces.map((workspace) => ({
+    id: workspace.id, title: workspace.id === READ_LATER ? "Read Later" : workspace.title,
+    color: workspace.color, tabs: workspace.tabs,
+    ...(workspace.restorePending === true ? { restorePending: true } : {}),
+  }));
   if (!ids.has(READ_LATER)) workspaces.push({ id: READ_LATER, title: "Read Later", color: "grey", tabs: [] });
-  return structuredClone({ ...value, enabled: true, pinnedWorkspaceId, shortcutSlots, closedShortcutSlots, workspaces });
+  return structuredClone({ version: 1, minimizeOthers: value.minimizeOthers, routes: value.routes,
+    pinnedWorkspaceId, shortcutSlots, closedShortcutSlots, workspaces });
 }
 
 // One owner for window/tab mutations. Reads never wait for this queue.
@@ -77,32 +97,34 @@ export function validateWindowState(value) {
 // to recreate every tab on each switch.
 export function createWindowWorkspaces(api) {
   let data = null;
+  let committedData = null;
   let chain = Promise.resolve();
   let warning = null;
   let blockedEdit = null;
   const bindings = new Map(); // workspace id -> live window id (session only)
+  const closingWindows = new Set(); // Mark synchronously, before queued captures can run.
   const overrides = new Map(); // tab id -> manually assigned URL
   const moves = new Map(); // tab id -> expected destination window
   const seeds = new Map(); // blank tabs created by us for a restore
   let timer;
   let readLaterTimer;
   let projectBounds = null;
-  let lastWindowSwitch = null;
   let recent = []; // Most recently focused first; separate from stable shortcut order.
+  let fresh = false;
+  let connecting = true;
+  let browserReady = false;
+  let pendingTasks = 0;
 
-  const ready = (async () => {
+  // Durable reads must not depend on browser discovery or the mutation queue.
+  const stateReady = (async () => {
     const stored = await api.storage.local.get(KEY);
-    if (stored[KEY]?.enabled) {
-      data = validateWindowState(stored[KEY]);
-      // Reconnect before any snapshot or event can observe/persist empty bindings.
-      // Service workers restart independently of the browser's onStartup event.
-      await start();
-    }
+    fresh = !stored[KEY];
+    data = stored[KEY] ? validateWindowState(stored[KEY]) : createWindowState();
+    committedData = structuredClone(data);
   })();
-  // Keep load failures visible without overwriting a malformed stored state.
+  const ready = stateReady.then(start).then(() => { browserReady = true; }).finally(() => { connecting = false; });
   void ready.catch((error) => { warning = error.message; });
 
-  const enabled = () => data?.enabled === true;
   const workspaceForWindow = (windowId) => Number.isInteger(windowId)
     ? data?.workspaces.find((workspace) => bindings.get(workspace.id) === windowId)
     : undefined;
@@ -126,14 +148,32 @@ export function createWindowWorkspaces(api) {
     return workspace;
   };
   function enqueue(task) {
-    const result = chain.then(() => ready).then(task);
+    pendingTasks++;
+    const result = chain.then(() => ready).then(() => { warning = null; return task(); }).finally(() => { pendingTasks--; });
     chain = result.catch((error) => { warning = error?.message || String(error); });
     return result;
   }
-  function event(task) { void enqueue(async () => { if (enabled()) await task(); }).catch(() => {}); }
-  async function persist() {
-    await api.storage.local.set({ [KEY]: data });
-    await api.storage.session.set({ [SESSION_KEY]: Object.fromEntries(bindings), [RECENT_KEY]: recent });
+  function event(task) { void enqueue(task).catch(() => {}); }
+  async function persist(next = data, extra = {}) {
+    const checkpoint = structuredClone(next);
+    try {
+      await api.storage.local.set({ ...extra, [KEY]: checkpoint });
+    } catch (error) {
+      // A rejected save must not leak into snapshots or a later successful save.
+      data = structuredClone(committedData);
+      throw error;
+    }
+    data = next;
+    committedData = checkpoint;
+    await persistSession();
+  }
+  async function persistSession() {
+    try {
+      await api.storage.session.set({ [SESSION_KEY]: Object.fromEntries(bindings), [RECENT_KEY]: recent });
+    } catch (error) {
+      // Local state is already committed. Session associations can be rebuilt.
+      warning = error.message;
+    }
   }
   async function edit(task) {
     if (blockedEdit) throw new Error("A browser edit is still pending. You can still open Settings and export a backup.");
@@ -168,26 +208,38 @@ export function createWindowWorkspaces(api) {
       pinned: tab.pinned === true, routeOverride: overrides.get(tab.id) === (tab.url || tab.pendingUrl),
     }));
   }
-  async function captureAll() {
-    if (!enabled()) return;
+  async function captureAll({ requiredWorkspaceId = null } = {}) {
+    let complete = true;
     for (const workspace of data.workspaces) {
       const windowId = bindings.get(workspace.id);
       if (!Number.isInteger(windowId)) continue;
+      if (closingWindows.has(windowId)) {
+        complete = false;
+        if (workspace.id === requiredWorkspaceId) throw new Error("This workspace window is closing. Its last complete inventory is retained.");
+        continue;
+      }
       try {
         const window = await normalWindow(windowId);
-        if (!workspace.restorePending) workspace.tabs = savedTabs(window.tabs || []);
+        if (!workspace.restorePending && !closingWindows.has(windowId)) workspace.tabs = savedTabs(window.tabs || []);
+        else {
+          complete = false;
+          if (workspace.id === requiredWorkspaceId && closingWindows.has(windowId)) throw new Error("This workspace window is closing.");
+        }
       } catch (error) {
+        complete = false;
+        if (workspace.id === requiredWorkspaceId) throw error;
         // Only a missing window is evidence that it closed; transient read errors
         // must not turn a live workspace into a second, newly restored window.
-        if (/no window|not found|non-incognito/i.test(error.message)) unbind(workspace.id);
+        if (isMissingWindow(error) || /non-incognito/i.test(error.message)) unbind(workspace.id);
         else warning = error.message;
       }
     }
     if (!bindings.has(data.pinnedWorkspaceId)) data.pinnedWorkspaceId = null;
     await persist();
+    return complete;
   }
   function scheduleCapture() {
-    if (!enabled()) return;
+    if (!data) return;
     clearTimeout(timer);
     timer = setTimeout(() => event(captureAll), 100);
   }
@@ -196,16 +248,41 @@ export function createWindowWorkspaces(api) {
     recent = [id, ...recent.filter((item) => item !== id)];
     await api.storage.session.set({ [RECENT_KEY]: recent });
   }
+  function bindWorkspace(workspace, window) {
+    bindings.set(workspace.id, window.id);
+    const remaining = [...workspace.tabs];
+    for (const tab of window.tabs || []) {
+      const url = tab.url || tab.pendingUrl;
+      let index = remaining.findIndex((saved) => saved.url === url && saved.pinned === tab.pinned);
+      if (index < 0) index = remaining.findIndex((saved) => saved.url === url);
+      if (index < 0) continue;
+      const [saved] = remaining.splice(index, 1);
+      if (saved.routeOverride) overrides.set(tab.id, url);
+      else overrides.delete(tab.id);
+    }
+  }
+  async function normalWindows(populate = true) {
+    return (await api.windows.getAll({ populate, windowTypes: ["normal"] }))
+      .filter((window) => window.type === "normal" && !window.incognito);
+  }
   async function start() {
-    projectBounds = windowBounds((await api.storage.session.get(PROJECT_BOUNDS_KEY))[PROJECT_BOUNDS_KEY]);
-    const storedRecent = (await api.storage.session.get(RECENT_KEY))[RECENT_KEY];
+    const session = await api.storage.session.get([PROJECT_BOUNDS_KEY, RECENT_KEY, SESSION_KEY]);
+    projectBounds = windowBounds(session[PROJECT_BOUNDS_KEY]);
+    const storedRecent = session[RECENT_KEY];
     recent = Array.isArray(storedRecent) ? [...new Set(storedRecent)].filter((id) => data.workspaces.some((w) => w.id === id)) : [];
-    const session = await api.storage.session.get(SESSION_KEY);
-    const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
+    const windows = await normalWindows();
     const available = new Map(windows.map((window) => [window.id, window]));
+    if (fresh) {
+      const current = windows.find((window) => window.focused);
+      if (current) {
+        bindWorkspace(find("personal"), current);
+        data.shortcutSlots[0] = "personal";
+        available.delete(current.id);
+      }
+    }
     for (const workspace of data.workspaces) {
       const id = session[SESSION_KEY]?.[workspace.id];
-      if (available.has(id)) { bindings.set(workspace.id, id); available.delete(id); }
+      if (available.has(id)) { bindWorkspace(workspace, available.get(id)); available.delete(id); }
     }
     const readLater = find(READ_LATER);
     if (!bindings.has(READ_LATER) && !readLater.tabs.length) {
@@ -247,11 +324,8 @@ export function createWindowWorkspaces(api) {
     // Capturing replaces saved inventories with live tabs; keep the old ones first.
     if (linked.some((pair) => pair.score < 1)) await api.storage.local.set({ [BEFORE_RECONNECT_KEY]: data });
     for (const { workspace, window } of linked) {
-      bindings.set(workspace.id, window.id);
-      delete workspace.restorePending;
-      for (const tab of window.tabs || []) {
-        if (workspace.tabs.some((saved) => saved.url === tab.url && saved.routeOverride)) overrides.set(tab.id, tab.url);
-      }
+      // Linking a partial restore does not mean its saved inventory is complete.
+      bindWorkspace(workspace, window);
     }
     return true;
   }
@@ -274,17 +348,18 @@ export function createWindowWorkspaces(api) {
         if (workspace.restorePending) await finishRestore(workspace, id);
         return id;
       } catch (error) {
-        if (!/no window|not found/i.test(error.message)) throw error;
+        if (!isMissingWindow(error)) throw error;
         unbind(workspace.id);
       }
     }
     // Its window may still be open but unlinked (browser restoring, extension
     // reloaded). Reopening every saved tab in a new window would duplicate it.
-    const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
-    if (await reconnect(windows, { only: workspace.id })) {
+    if (await reconnect(await normalWindows(), { only: workspace.id })) {
       restoreShortcutSlots();
+      const windowId = bindings.get(workspace.id);
+      if (workspace.restorePending) await finishRestore(workspace, windowId);
       await captureAll();
-      return bindings.get(workspace.id);
+      return windowId;
     }
     clearShortcut(workspace.id);
     workspace.restorePending = true;
@@ -339,7 +414,6 @@ export function createWindowWorkspaces(api) {
   async function replacementBounds(id) {
     const current = await api.windows.getLastFocused({ windowTypes: ["normal"] });
     const source = workspaceForWindow(current.id);
-    if (lastWindowSwitch) lastWindowSwitch.source = { workspaceId: source?.id || null, state: current.state, bounds: windowBounds(current) };
     if (!source) return null;
     await rememberProjectBounds(current);
     if (id === data.pinnedWorkspaceId || source.id === id) return null;
@@ -360,16 +434,13 @@ export function createWindowWorkspaces(api) {
   }
   async function focus(id, { preserveProject = true, allowResume = true } = {}) {
     const workspace = find(id);
-    lastWindowSwitch = { workspaceId: id, pinnedWorkspaceId: data.pinnedWorkspaceId };
     // Read the outgoing window before creating/restoring the destination can
     // change focus. Geometry never comes from the pinned base or unrelated windows.
     let bounds;
     try { if (preserveProject) bounds = await replacementBounds(id); }
     catch (error) { warning = error.message; }
-    lastWindowSwitch.requestedBounds = bounds || null;
     const windowId = allowResume ? await ensureLive(workspace) : bindings.get(id);
     let window = await normalWindow(windowId);
-    lastWindowSwitch.before = { state: window.state, bounds: windowBounds(window) };
     if (window.state === "minimized") {
       await edit(() => api.windows.update(windowId, { state: "normal" }));
       // Chromium can resolve update() before macOS finishes restoring the
@@ -387,7 +458,6 @@ export function createWindowWorkspaces(api) {
     }
     await edit(() => api.windows.update(windowId, { focused: true }));
     window = await normalWindow(windowId);
-    lastWindowSwitch.after = { state: window.state, bounds: windowBounds(window) };
     await rememberProjectBounds(window);
     await rememberFocus(id);
     await minimizeOtherWindows(id, { preserveProject });
@@ -464,7 +534,7 @@ export function createWindowWorkspaces(api) {
       // A stale binding must never turn background routing into a resume.
       try { await normalWindow(bindings.get(route.contextId)); }
       catch (error) {
-        if (!/no window|not found/i.test(error.message)) throw error;
+        if (!isMissingWindow(error)) throw error;
         unbind(route.contextId);
         await persist();
         return;
@@ -474,63 +544,10 @@ export function createWindowWorkspaces(api) {
       await moveTab(tabId, route.contextId, follow, false);
     }
   }
-  async function enable(legacy, windowId, recordIds = {}) {
-    if (enabled()) throw new Error("Window workspaces are already enabled.");
-    const source = await normalWindow(windowId);
-    const groups = await api.tabGroups.query({ windowId });
-    const byGroup = new Map(groups.map((group) => [group.id, group.title]));
-    const activeId = legacy.activeContextId || legacy.contexts[0].id;
-    const definitions = [...legacy.contexts.map((context) => ({ ...context, tabs: [] })),
-      { id: READ_LATER, title: "Read Later", color: "grey", tabs: [] },
-      { id: "inactive", title: "Inactive", color: "grey", tabs: [] }];
-    const plan = new Map(definitions.map((workspace) => [workspace.id, []]));
-    for (const tab of source.tabs || []) {
-      const workspace = !tab.pinned && definitions.find((item) => item.title === byGroup.get(tab.groupId));
-      const record = legacy.records?.[recordIds[tab.id]];
-      const recordedId = record?.attention === "readLater" ? READ_LATER : record?.attention === "inactive" ? "inactive" : record?.contextId;
-      const destination = tab.pinned ? activeId : workspace?.id || (plan.has(recordedId) ? recordedId : activeId);
-      plan.get(destination).push(tab);
-    }
-    for (const workspace of definitions) workspace.tabs = savedTabs(plan.get(workspace.id));
-    // Existing manually saved sets remain available, without opening more windows.
-    for (const set of legacy.workspaces || []) definitions.push({
-      id: `set-${set.id}`, title: set.title, color: legacy.contexts.find((item) => item.id === set.contextId)?.color || "grey",
-      tabs: set.pages.map((page) => ({ ...page, pinned: false, routeOverride: true })),
-    });
-    const next = validateWindowState({ version: 1, enabled: true, minimizeOthers: true,
-      workspaces: definitions, routes: legacy.routes.map((route) => ({ ...route, activate: false })) });
-    await api.storage.local.set({ rauiriBeforeWindowMode: legacy, [KEY]: next });
-    data = next; // Legacy orchestration stops before any tab moves begin.
-    bindings.set(activeId, windowId);
-    await persist();
-    if (!plan.get(activeId).length) await edit(() => api.tabs.create({ windowId, active: true }));
-    for (const workspace of data.workspaces) {
-      const tabs = plan.get(workspace.id) || [];
-      if (workspace.id === activeId || !tabs.length) continue;
-      // Move live tabs, never reload them from saved URLs during migration.
-      const window = await edit(async () => {
-        const created = await api.windows.create({ tabId: tabs[0].id, focused: false, type: "normal" });
-        bindings.set(workspace.id, created.id);
-        return created;
-      });
-      for (const tab of tabs.slice(1)) await edit(() => api.tabs.move(tab.id, { windowId: window.id, index: -1 }));
-      await persist();
-    }
-    for (const id of bindings.values()) {
-      const tabs = await api.tabs.query({ windowId: id });
-      const grouped = tabs.filter((tab) => tab.groupId !== api.tabGroups.TAB_GROUP_ID_NONE).map((tab) => tab.id);
-      if (grouped.length) await edit(() => api.tabs.ungroup(grouped));
-    }
-    data.shortcutSlots = data.shortcutSlots.map((id) => bindings.has(id) ? id : null);
-    await captureAll();
-    await ensureReadLater();
-    await focus(activeId);
-  }
   async function ensureReadLater() {
-    if (!enabled() || blockedEdit || bindings.has(READ_LATER)) return;
-    const windows = await api.windows.getAll({ windowTypes: ["normal"] });
+    if (blockedEdit || bindings.has(READ_LATER)) return;
     // Do not fight browser shutdown or create a window in an otherwise closed browser.
-    if (!windows.some((window) => window.type === "normal" && !window.incognito)) return;
+    if (!(await normalWindows(false)).length) return;
     const id = await ensureLive(find(READ_LATER));
     await edit(() => api.windows.update(id, { state: "minimized" }));
     await captureAll();
@@ -541,9 +558,8 @@ export function createWindowWorkspaces(api) {
     // manual Read Later close or the browser exiting, and let restored windows
     // arrive and relink before deciding Read Later needs a new window.
     readLaterTimer = setTimeout(() => event(async () => {
-      const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
       // Two pages minimum, so a single torn-off tab never claims a workspace.
-      if (await reconnect(windows, { minimumPages: 2 })) {
+      if (await reconnect(await normalWindows(), { minimumPages: 2 })) {
         restoreShortcutSlots();
         await captureAll();
       }
@@ -554,14 +570,14 @@ export function createWindowWorkspaces(api) {
     const workspace = find(id);
     if (id === READ_LATER) throw new Error("Read Later is built in and cannot be put away.");
     if (blockedEdit) throw new Error("A browser edit is still pending. Try again once it completes.");
-    await captureAll(); // Durable inventory must succeed before closing anything.
+    await captureAll({ requiredWorkspaceId: id }); // A fresh, durable source inventory is mandatory.
     const windowId = bindings.get(id);
     if (!Number.isInteger(windowId)) { clearShortcut(id); await persist(); return; }
     await edit(() => api.windows.remove(windowId));
     try {
       await normalWindow(windowId);
     } catch (error) {
-      if (!/no window|not found/i.test(error.message)) throw error;
+      if (!isMissingWindow(error)) throw error;
       unbind(workspace.id, false);
       await persist();
       return;
@@ -575,7 +591,7 @@ export function createWindowWorkspaces(api) {
     if (!["move", "delete"].includes(message.tabs) || !["move", "delete"].includes(message.rules)) throw new Error("Choose what happens to this workspace’s tabs and rules.");
     const destination = message.tabs === "move" || message.rules === "move" ? find(message.destinationId) : null;
     if (destination?.id === source.id) throw new Error("Choose a different destination workspace.");
-    await captureAll();
+    await captureAll({ requiredWorkspaceId: source.id });
     const sourceWindowId = bindings.get(source.id);
     const live = Number.isInteger(sourceWindowId);
     if (live && (message.tabs !== "move" || message.rules !== "move")) throw new Error("An active workspace must be merged. Its live tabs and rules must move to another workspace.");
@@ -599,7 +615,7 @@ export function createWindowWorkspaces(api) {
         if (remaining.tabs?.length) throw new Error("New tabs appeared in the source workspace. Review them and try merging again.");
         await edit(() => api.windows.remove(sourceWindowId));
       } catch (error) {
-        if (!/no window|not found/i.test(error.message)) throw error;
+        if (!isMissingWindow(error)) throw error;
       }
       unbind(source.id);
       await captureAll();
@@ -616,11 +632,10 @@ export function createWindowWorkspaces(api) {
     next.routes = next.routes.flatMap((route) => route.contextId !== source.id ? [route]
       : message.rules === "move" ? [{ ...route, contextId: destination.id }] : []);
     if (next.pinnedWorkspaceId === source.id) next.pinnedWorkspaceId = null;
-    await api.storage.local.set({ [KEY]: validateWindowState(next) });
-    data = next;
+    await persist(validateWindowState(next));
     recent = recent.filter((id) => id !== source.id);
     seeds.delete(source.id);
-    await persist();
+    await persistSession();
     if (!live && message.tabs === "move" && bindings.has(destination.id)) {
       await finishRestore(find(destination.id), bindings.get(destination.id));
       await captureAll();
@@ -628,9 +643,11 @@ export function createWindowWorkspaces(api) {
     if (live) await focus(destination.id, { allowResume: false });
   }
   function overview(windowId) {
+    const data = committedData;
+    const current = Number.isInteger(windowId) ? data.workspaces.find((workspace) => bindings.get(workspace.id) === windowId) : null;
     return {
-      mode: "windows", managed: Boolean(workspaceForWindow(windowId)), currentWorkspaceId: workspaceForWindow(windowId)?.id || null,
-      browserWarning: warning, lastWindowSwitch, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent], pinnedWorkspaceId: data.pinnedWorkspaceId,
+      managed: Boolean(current), currentWorkspaceId: current?.id || null,
+      browserWarning: warning, connecting, browserReady, minimizeOthers: data.minimizeOthers, recentWorkspaceIds: [...recent], pinnedWorkspaceId: data.pinnedWorkspaceId,
       shortcutSlots: [...data.shortcutSlots],
       workspaces: data.workspaces.map((workspace) => {
         const { id, title, color } = workspace;
@@ -640,31 +657,37 @@ export function createWindowWorkspaces(api) {
           windowId: bindings.get(id) ?? null, restoring: workspace.restorePending === true,
           pinned: id === data.pinnedWorkspaceId, tabCount: workspace.tabs.length };
       }),
-      contexts: data.workspaces.map(({ id, title, color }, order) => ({ id, title, color, order })),
-      routes: data.routes.map((route) => ({ ...route, active: bindings.has(route.contextId) })), settings: {}, hasManagedWindow: bindings.size > 0, managedWindowId: null,
+      routes: data.routes.map((route) => ({ ...route, active: bindings.has(route.contextId) })), hasManagedWindow: bindings.size > 0,
     };
   }
   async function handle(message) {
-    await ready;
-    if (["snapshot", "configurationSnapshot"].includes(message.type)) return overview(message.windowId);
+    await stateReady;
+    if (message.type === "snapshot") return overview(message.windowId);
     if (message.type === "exportBackup") {
-      const legacy = await api.storage.local.get("rauiriState");
-      return { format: FORMAT, formatVersion: 1, exportedAt: new Date().toISOString(),
-        state: message.configurationOnly ? { ...data, workspaces: data.workspaces.map(({ id, title, color }) => ({ id, title, color, tabs: [] })) } : data,
-        ...(message.configurationOnly ? {} : { legacyState: legacy.rauiriState }) };
+      let snapshot = { fresh: false, reason: "Browser work is pending; using the last successfully saved inventory." };
+      if (message.configurationOnly) snapshot = { fresh: true, reason: "Saved configuration only; no page inventory included." };
+      else if (browserReady && !blockedEdit && pendingTasks === 0) {
+        let timeout;
+        try {
+          const capture = enqueue(captureAll).then(
+            (complete) => ({ fresh: complete, reason: complete ? null : "Some windows could not be captured; their previous inventories are retained." }),
+            (error) => ({ fresh: false, reason: `Snapshot failed: ${error.message}. Using the last successfully saved inventory.` }),
+          );
+          snapshot = await Promise.race([capture, new Promise((resolve) => {
+            timeout = setTimeout(() => resolve({ fresh: false, reason: "Snapshot timed out; using the last successfully saved inventory." }), 2000);
+          })]);
+        } finally { clearTimeout(timeout); }
+      }
+      const state = structuredClone(committedData);
+      if (message.configurationOnly) state.workspaces = state.workspaces.map(({ id, title, color }) => ({ id, title, color, tabs: [] }));
+      return { format: FORMAT, formatVersion: 1, exportedAt: new Date().toISOString(), snapshot, state };
     }
-    if (message.type === "exportLegacyBackup") {
-      const stored = await api.storage.local.get("rauiriBeforeWindowMode");
-      if (!stored.rauiriBeforeWindowMode) throw new Error("No original group backup is available.");
-      return createBackup(stored.rauiriBeforeWindowMode);
+    const restoreKey = RESTORE_KEYS[message.type];
+    if (typeof restoreKey === "string") {
+      const stored = await api.storage.local.get(restoreKey);
+      if (!stored[restoreKey]) throw new Error("No saved restore point exists for this action yet.");
+      return { format: FORMAT, formatVersion: 1, state: stored[restoreKey] };
     }
-    if (message.type === "exportWorkspaceDeletionBackup") {
-      const stored = await api.storage.local.get("rauiriBeforeWorkspaceDelete");
-      if (!stored.rauiriBeforeWorkspaceDelete) throw new Error("No workspace deletion backup exists.");
-      return { format: FORMAT, formatVersion: 1, state: stored.rauiriBeforeWorkspaceDelete };
-    }
-    if (message.type === "recoverySnapshot") return []; // Legacy records remain in full backups.
-    if (message.type === "openOptions") return api.runtime.openOptionsPage();
     return enqueue(async () => {
       switch (message.type) {
         case "focusWindowWorkspace": await focus(message.workspaceId); break;
@@ -680,20 +703,22 @@ export function createWindowWorkspaces(api) {
         }
         case "attachWorkspaceWindow": {
           find(message.workspaceId);
-          await normalWindow(message.windowId);
-          if (workspaceForWindow(message.windowId) || bindings.has(message.workspaceId)) throw new Error("The window or workspace is already assigned.");
-          await api.storage.local.set({ rauiriBeforeWorkspaceAttach: data });
-          const workspace = find(message.workspaceId);
-          workspace.savedBeforeAttach = structuredClone(workspace.tabs);
+          const window = await normalWindow(message.windowId);
+          if (closingWindows.has(window.id)) throw new Error("This window is closing.");
+          if (workspaceForWindow(window.id) || bindings.has(message.workspaceId)) throw new Error("The window or workspace is already assigned.");
+          const next = structuredClone(data);
+          const workspace = next.workspaces.find((item) => item.id === message.workspaceId);
+          workspace.tabs = savedTabs(window.tabs || []);
           delete workspace.restorePending;
-          bindings.set(message.workspaceId, message.windowId);
           // Reattaching after a failed reconnect restores the number it held.
-          const remembered = data.closedShortcutSlots.indexOf(workspace.id);
-          if (remembered >= 0 && data.shortcutSlots[remembered] === null && !data.shortcutSlots.includes(workspace.id)) {
-            data.shortcutSlots[remembered] = workspace.id;
-            data.closedShortcutSlots[remembered] = null;
+          const remembered = next.closedShortcutSlots.indexOf(workspace.id);
+          if (remembered >= 0 && next.shortcutSlots[remembered] === null && !next.shortcutSlots.includes(workspace.id)) {
+            next.shortcutSlots[remembered] = workspace.id;
+            next.closedShortcutSlots[remembered] = null;
           }
-          await captureAll();
+          await persist(next, { rauiriBeforeWorkspaceAttach: committedData });
+          bindWorkspace(find(message.workspaceId), window);
+          await persistSession();
           break;
         }
         case "setPinnedWorkspace": {
@@ -739,15 +764,15 @@ export function createWindowWorkspaces(api) {
           break;
         }
         case "setWorkspacePreferences": data.minimizeOthers = message.minimizeOthers === true; await persist(); break;
-        case "saveContexts": {
-          if (!Array.isArray(message.contexts) || message.contexts.length !== data.workspaces.length) throw new Error("The workspace list changed. Refresh Settings before saving.");
+        case "saveWorkspaceDetails": {
+          if (!Array.isArray(message.workspaces) || message.workspaces.length !== data.workspaces.length) throw new Error("The workspace list changed. Refresh Settings before saving.");
           const seen = new Set();
-          const updated = message.contexts.map((context) => {
-            const workspace = find(context.id);
-            if (workspace.id === READ_LATER && context.title !== "Read Later") throw new Error("Read Later’s name is fixed.");
-            if (seen.has(context.id) || !String(context.title || "").trim() || !TAB_GROUP_COLORS.includes(context.color)) throw new Error("Invalid workspace details.");
-            seen.add(context.id);
-            return { ...workspace, title: context.title.trim(), color: context.color };
+          const updated = message.workspaces.map((details) => {
+            const workspace = find(details?.id);
+            if (workspace.id === READ_LATER && details.title !== "Read Later") throw new Error("Read Later’s name is fixed.");
+            if (seen.has(details.id) || typeof details.title !== "string" || !details.title.trim() || !WORKSPACE_COLORS.includes(details.color)) throw new Error("Invalid workspace details.");
+            seen.add(details.id);
+            return { ...workspace, title: details.title.trim(), color: details.color };
           });
           data.workspaces = updated; await persist(); break;
         }
@@ -777,15 +802,13 @@ export function createWindowWorkspaces(api) {
         }
         case "removeRoute": data.routes = data.routes.filter((route) => route.id !== message.routeId); await persist(); break;
         case "importBackup": {
-          if (message.backup?.format !== FORMAT || message.backup.formatVersion !== 1) throw new Error("Choose a window-workspace backup. Your original group backup is retained separately.");
+          if (message.backup?.format !== FORMAT || message.backup.formatVersion !== 1) throw new Error("Choose a Rauiri window-workspace backup.");
           if ([...bindings.keys()].some((id) => id !== READ_LATER)) throw new Error("Put away other workspaces before importing. Read Later can stay open. Export a backup first.");
           if (blockedEdit) throw new Error("A browser edit is still pending. Try again once it completes.");
           const next = validateWindowState(message.backup.state);
           next.shortcutSlots.fill(null); // Imported workspaces are put away until explicitly resumed.
           next.closedShortcutSlots.fill(null);
-          const legacy = message.backup.legacyState ? stateFromBackup({ format: "rauiri-backup", formatVersion: 1, state: message.backup.legacyState }) : null;
-          const original = !enabled() ? (await api.storage.local.get("rauiriState")).rauiriState : null;
-          if (enabled()) await captureAll();
+          await captureAll({ requiredWorkspaceId: bindings.has(READ_LATER) ? READ_LATER : null });
           if (bindings.has(READ_LATER)) {
             const currentTabs = find(READ_LATER).tabs;
             const currentUrls = new Set(currentTabs.map((tab) => tab.url));
@@ -794,25 +817,17 @@ export function createWindowWorkspaces(api) {
             reading.restorePending = true;
           }
           if (next.pinnedWorkspaceId !== READ_LATER || !bindings.has(READ_LATER)) next.pinnedWorkspaceId = null;
-          await api.storage.local.set({ rauiriBeforeWorkspaceImport: data, [KEY]: next,
-            ...(original ? { rauiriBeforeWindowMode: original } : {}), ...(legacy ? { rauiriState: legacy } : {}) });
-          data = next;
+          await persist(next, { rauiriBeforeWorkspaceImport: committedData });
           recent = recent.filter((id) => data.workspaces.some((workspace) => workspace.id === id));
-          await persist();
+          await persistSession();
           if (bindings.has(READ_LATER)) {
             await finishRestore(find(READ_LATER), bindings.get(READ_LATER));
             await captureAll();
           } else scheduleReadLater();
-          return { contexts: data.workspaces.length, routes: data.routes.length, records: data.workspaces.reduce((n, w) => n + w.tabs.length, 0) };
+          return { workspaces: data.workspaces.length, routes: data.routes.length, tabs: data.workspaces.reduce((n, w) => n + w.tabs.length, 0) };
         }
-        case "exportPreviousBackup": {
-          const stored = await api.storage.local.get("rauiriBeforeWorkspaceImport");
-          if (!stored.rauiriBeforeWorkspaceImport) throw new Error("No pre-import workspace backup exists.");
-          return { format: FORMAT, formatVersion: 1, state: stored.rauiriBeforeWorkspaceImport };
-        }
-        default: throw new Error("This action belongs to the old group workflow. Use the workspace switcher.");
+        default: throw new Error("Unknown Rauiri action.");
       }
-      return { ok: true };
     });
   }
 
@@ -847,17 +862,22 @@ export function createWindowWorkspaces(api) {
     });
   });
   api.tabs.onRemoved.addListener((id, info) => {
+    if (info.isWindowClosing) closingWindows.add(info.windowId);
     overrides.delete(id);
     moves.delete(id);
     if (!info.isWindowClosing) scheduleCapture();
   });
-  api.windows.onRemoved.addListener((windowId) => event(async () => {
-    const workspace = workspaceForWindow(windowId);
-    if (workspace) { unbind(workspace.id); await persist(); }
-    scheduleReadLater();
-  }));
+  api.windows.onRemoved.addListener((windowId) => {
+    closingWindows.add(windowId);
+    event(async () => {
+      const workspace = workspaceForWindow(windowId);
+      if (workspace) { unbind(workspace.id); await persist(); }
+      closingWindows.delete(windowId);
+      scheduleReadLater();
+    });
+  });
   api.windows.onCreated.addListener((window) => {
-    if (enabled() && window.type === "normal" && !window.incognito) scheduleReadLater(1000);
+    if (data && window.type === "normal" && !window.incognito) scheduleReadLater(1000);
   });
   api.windows.onFocusChanged.addListener((windowId) => event(async () => {
     const workspace = workspaceForWindow(windowId);
@@ -881,8 +901,9 @@ export function createWindowWorkspaces(api) {
       if (id && (id === READ_LATER || bindings.has(id))) await focus(id, { allowResume: id === READ_LATER });
     }
   }));
-  api.runtime.onStartup.addListener(() => event(start));
+  // Register to wake the MV3 worker at browser launch; initialization above
+  // already reconnects its windows, so no second startup task is needed.
+  api.runtime.onStartup.addListener(() => {});
 
-  return { ready, get enabled() { return enabled(); },
-    start: () => enqueue(start), enable: (legacy, windowId, recordIds) => enqueue(() => enable(legacy, windowId, recordIds)), handle };
+  return { ready, handle };
 }

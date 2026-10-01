@@ -5,7 +5,10 @@ const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.me
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.background.type, "module");
 assert.ok(manifest.permissions.includes("tabs"));
-assert.ok(manifest.permissions.includes("tabGroups"));
+assert.ok(manifest.permissions.includes("storage"));
+assert.ok(manifest.permissions.includes("webNavigation"));
+assert.ok(!manifest.permissions.some((permission) => ["tabGroups", "scripting", "alarms"].includes(permission)));
+assert.equal(manifest.host_permissions, undefined);
 
 const paths = [
   manifest.background.service_worker,
