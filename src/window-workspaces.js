@@ -6,6 +6,23 @@ const RECENT_KEY = "rauiriRecentWorkspaces";
 const PROJECT_BOUNDS_KEY = "rauiriProjectBounds";
 const FORMAT = "rauiri-window-workspaces";
 const READ_LATER = "read-later";
+const BEFORE_RECONNECT_KEY = "rauiriBeforeReconnect";
+// Share of pages (intersection over union) a window needs with a saved workspace.
+const RECONNECT_OVERLAP = 0.5;
+
+// Multiset overlap of two URL lists: shared pages over all distinct page slots.
+export function pageOverlap(saved, live) {
+  const remaining = new Map();
+  for (const url of saved) remaining.set(url, (remaining.get(url) || 0) + 1);
+  let shared = 0;
+  for (const url of live) {
+    if (!remaining.get(url)) continue;
+    remaining.set(url, remaining.get(url) - 1);
+    shared++;
+  }
+  const total = saved.length + live.length - shared;
+  return total ? shared / total : 0;
+}
 
 function validateShortcutSlots(slots, workspaceIds, message) {
   const assigned = Array.isArray(slots) ? slots.filter((id) => id !== null) : [];
@@ -190,36 +207,64 @@ export function createWindowWorkspaces(api) {
       const id = session[SESSION_KEY]?.[workspace.id];
       if (available.has(id)) { bindings.set(workspace.id, id); available.delete(id); }
     }
-    // IDs do not survive browser restarts. Reconnect only unique exact URL multisets,
-    // never a loose "one matching page" guess. Ambiguous windows need explicit attachment.
-    const signature = (tabs) => JSON.stringify(tabs.map((tab) => tab.url || tab.pendingUrl).filter(isRoutableUrl).sort());
-    for (const workspace of data.workspaces) {
-      if (bindings.has(workspace.id)) continue;
-      if (workspace.id === READ_LATER && !workspace.tabs.length) {
-        const blank = [...available.values()].filter((window) => window.tabs?.length === 1
-          && ["about:blank", "chrome://newtab/"].includes(window.tabs[0].url));
-        if (blank.length === 1) { bindings.set(workspace.id, blank[0].id); available.delete(blank[0].id); }
-      }
-      if (!workspace.tabs.length) continue;
-      const sig = signature(workspace.tabs);
-      if (data.workspaces.filter((item) => signature(item.tabs) === sig).length !== 1) continue;
-      const matches = [...available.values()].filter((window) => signature(window.tabs || []) === sig);
-      if (matches.length === 1) { bindings.set(workspace.id, matches[0].id); available.delete(matches[0].id); }
+    const readLater = find(READ_LATER);
+    if (!bindings.has(READ_LATER) && !readLater.tabs.length) {
+      const blank = [...available.values()].filter((window) => window.tabs?.length === 1
+        && ["about:blank", "chrome://newtab/"].includes(window.tabs[0].url));
+      if (blank.length === 1) { bindings.set(READ_LATER, blank[0].id); available.delete(blank[0].id); }
     }
-    for (const workspace of data.workspaces) {
-      const window = windows.find((item) => item.id === bindings.get(workspace.id));
-      for (const tab of window?.tabs || []) {
-        if (workspace.tabs.some((saved) => saved.url === tab.url && saved.routeOverride)) overrides.set(tab.id, tab.url);
-      }
-    }
+    await reconnect([...available.values()]);
     const focused = windows.find((window) => window.focused);
     const current = workspaceForWindow(focused?.id);
     if (current) await rememberFocus(current.id);
-    data.shortcutSlots = data.shortcutSlots.map((id, index) => bindings.has(id) ? id
-      : bindings.has(data.closedShortcutSlots[index]) ? data.closedShortcutSlots[index] : null);
-    data.closedShortcutSlots = data.closedShortcutSlots.map((id, index) => data.shortcutSlots[index] === id ? null : id);
+    restoreShortcutSlots();
     await captureAll();
-    await ensureReadLater();
+    // At browser launch, windows may still be restoring; Read Later's own window
+    // must get the chance to relink before a replacement is created.
+    if (bindings.has(READ_LATER)) await ensureReadLater();
+    else scheduleReadLater(1000);
+  }
+  // Window IDs do not survive browser restarts or extension reloads, and saved
+  // inventories drift from live windows. Link by page overlap, but only when the
+  // workspace and window are each other's clear best match; ties stay unassigned.
+  // `only` limits linking to one workspace while still ranking against all of them.
+  async function reconnect(windows, { only = null, minimumPages = 1 } = {}) {
+    const urls = (tabs) => tabs.map((tab) => tab.url || tab.pendingUrl).filter(isRoutableUrl);
+    const unbound = windows.filter((window) => !workspaceForWindow(window.id) && urls(window.tabs || []).length >= minimumPages);
+    const candidates = data.workspaces.filter((workspace) => !bindings.has(workspace.id) && urls(workspace.tabs).length)
+      .flatMap((workspace) => unbound.map((window) => ({
+        workspace, window, score: pageOverlap(urls(workspace.tabs), urls(window.tabs || [])),
+      })));
+    const clearBest = (pairs) => {
+      const [first, second] = pairs.toSorted((a, b) => b.score - a.score);
+      return first && first.score > (second?.score ?? 0) ? first : null;
+    };
+    const linked = candidates.filter((pair) => pair.score >= RECONNECT_OVERLAP
+      && (!only || pair.workspace.id === only)
+      && clearBest(candidates.filter((other) => other.workspace === pair.workspace)) === pair
+      && clearBest(candidates.filter((other) => other.window === pair.window)) === pair);
+    if (!linked.length) return false;
+    // Capturing replaces saved inventories with live tabs; keep the old ones first.
+    if (linked.some((pair) => pair.score < 1)) await api.storage.local.set({ [BEFORE_RECONNECT_KEY]: data });
+    for (const { workspace, window } of linked) {
+      bindings.set(workspace.id, window.id);
+      delete workspace.restorePending;
+      for (const tab of window.tabs || []) {
+        if (workspace.tabs.some((saved) => saved.url === tab.url && saved.routeOverride)) overrides.set(tab.id, tab.url);
+      }
+    }
+    return true;
+  }
+  function restoreShortcutSlots() {
+    const previousSlots = data.shortcutSlots;
+    data.shortcutSlots = previousSlots.map((id, index) => bindings.has(id) ? id
+      : bindings.has(data.closedShortcutSlots[index]) ? data.closedShortcutSlots[index] : null);
+    // A workspace that did not reconnect keeps a claim on its number, so attaching
+    // its window later restores the shortcut.
+    data.closedShortcutSlots = data.closedShortcutSlots.map((id, index) => {
+      if (data.shortcutSlots[index] !== null) return data.shortcutSlots[index] === id ? null : id;
+      return previousSlots[index] ?? id;
+    }).map((id, index, slots) => slots.indexOf(id) === index ? id : null);
   }
   async function ensureLive(workspace) {
     const id = bindings.get(workspace.id);
@@ -232,6 +277,14 @@ export function createWindowWorkspaces(api) {
         if (!/no window|not found/i.test(error.message)) throw error;
         unbind(workspace.id);
       }
+    }
+    // Its window may still be open but unlinked (browser restoring, extension
+    // reloaded). Reopening every saved tab in a new window would duplicate it.
+    const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
+    if (await reconnect(windows, { only: workspace.id })) {
+      restoreShortcutSlots();
+      await captureAll();
+      return bindings.get(workspace.id);
     }
     clearShortcut(workspace.id);
     workspace.restorePending = true;
@@ -482,11 +535,20 @@ export function createWindowWorkspaces(api) {
     await edit(() => api.windows.update(id, { state: "minimized" }));
     await captureAll();
   }
-  function scheduleReadLater() {
+  function scheduleReadLater(delay = 300) {
     clearTimeout(readLaterTimer);
     // Let a batch of closing windows settle before deciding whether this is a
-    // manual Read Later close or the browser exiting.
-    readLaterTimer = setTimeout(() => event(ensureReadLater), 300);
+    // manual Read Later close or the browser exiting, and let restored windows
+    // arrive and relink before deciding Read Later needs a new window.
+    readLaterTimer = setTimeout(() => event(async () => {
+      const windows = (await api.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter((window) => !window.incognito);
+      // Two pages minimum, so a single torn-off tab never claims a workspace.
+      if (await reconnect(windows, { minimumPages: 2 })) {
+        restoreShortcutSlots();
+        await captureAll();
+      }
+      await ensureReadLater();
+    }), delay);
   }
   async function putAway(id) {
     const workspace = find(id);
@@ -625,6 +687,12 @@ export function createWindowWorkspaces(api) {
           workspace.savedBeforeAttach = structuredClone(workspace.tabs);
           delete workspace.restorePending;
           bindings.set(message.workspaceId, message.windowId);
+          // Reattaching after a failed reconnect restores the number it held.
+          const remembered = data.closedShortcutSlots.indexOf(workspace.id);
+          if (remembered >= 0 && data.shortcutSlots[remembered] === null && !data.shortcutSlots.includes(workspace.id)) {
+            data.shortcutSlots[remembered] = workspace.id;
+            data.closedShortcutSlots[remembered] = null;
+          }
           await captureAll();
           break;
         }
@@ -789,7 +857,7 @@ export function createWindowWorkspaces(api) {
     scheduleReadLater();
   }));
   api.windows.onCreated.addListener((window) => {
-    if (enabled() && window.type === "normal" && !window.incognito) scheduleReadLater();
+    if (enabled() && window.type === "normal" && !window.incognito) scheduleReadLater(1000);
   });
   api.windows.onFocusChanged.addListener((windowId) => event(async () => {
     const workspace = workspaceForWindow(windowId);

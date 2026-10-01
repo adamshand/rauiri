@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWindowWorkspaces, validateWindowState } from "../src/window-workspaces.js";
+import { createWindowWorkspaces, pageOverlap, validateWindowState } from "../src/window-workspaces.js";
 import { createInitialState } from "../src/domain.js";
 
 function harness() {
@@ -985,9 +985,102 @@ test("closing every window does not make Read Later fight browser shutdown", asy
   const window = await app.api.windows.create({ focused: true });
   app.api.windows.onCreated.emit(window);
   await app.barrier();
-  t.mock.timers.tick(300);
+  t.mock.timers.tick(1000); // New windows get time to relink before Read Later is recreated.
   await app.barrier();
   assert.notEqual((await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "read-later").windowId, null);
+});
+
+test("page overlap counts duplicate pages and ignores order", () => {
+  assert.equal(pageOverlap(["a", "b"], ["b", "a"]), 1);
+  assert.equal(pageOverlap(["a", "a", "b"], ["a", "b"]), 2 / 3);
+  assert.equal(pageOverlap(["a", "b", "c", "d"], ["a", "b", "c", "e"]), 3 / 5);
+  assert.equal(pageOverlap([], []), 0);
+});
+
+test("extension reload reconnects windows whose tabs drifted and keeps their shortcut numbers", async () => {
+  const app = await enabled();
+  for (const page of ["a", "b", "c"]) await app.api.tabs.create({ windowId: 1, url: `https://personal.example/${page}` });
+  // A worker restart keeps session bindings, so it captures the larger inventory.
+  await createWindowWorkspaces(app.api).ready;
+  assert.equal(app.local.rauiriWindowWorkspaces.workspaces.find((w) => w.id === "personal").tabs.length, 5);
+  // Extension reload wipes session storage; meanwhile one page changed and one opened.
+  delete app.session.rauiriWorkspaceWindows;
+  [...app.tabs.values()].find((tab) => tab.url === "https://personal.example/a").url = "https://personal.example/changed";
+  await app.api.tabs.create({ windowId: 1, url: "https://personal.example/new" });
+  const saved = structuredClone(app.local.rauiriWindowWorkspaces);
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  const view = await restarted.handle({ type: "snapshot", windowId: 1 });
+  assert.equal(view.currentWorkspaceId, "personal");
+  assert.deepEqual(view.shortcutSlots.slice(0, 2), ["personal", "work"]);
+  assert.deepEqual(app.local.rauiriBeforeReconnect.workspaces, saved.workspaces);
+  assert.equal(app.calls.some(([name]) => name === "window.create"), false);
+});
+
+test("a workspace that fails to reconnect remembers its number for a later attach", async () => {
+  const app = await enabled();
+  delete app.session.rauiriWorkspaceWindows;
+  for (const tab of app.tabs.values()) if (tab.windowId === 10) tab.url = "https://unrelated.example/";
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  let view = await restarted.handle({ type: "snapshot", windowId: 10 });
+  assert.equal(view.currentWorkspaceId, null);
+  assert.equal(view.shortcutSlots[1], null);
+  await restarted.handle({ type: "attachWorkspaceWindow", workspaceId: "work", windowId: 10 });
+  view = await restarted.handle({ type: "snapshot", windowId: 10 });
+  assert.equal(view.currentWorkspaceId, "work");
+  assert.equal(view.shortcutSlots[1], "work");
+});
+
+// Simulates a browser that restores some windows after the worker has started.
+async function restartWithLateWindow(app, windowId) {
+  delete app.session.rauiriWorkspaceWindows;
+  const late = app.windows.get(windowId);
+  const lateTabs = [...app.tabs.values()].filter((tab) => tab.windowId === windowId);
+  app.windows.delete(windowId);
+  for (const tab of lateTabs) app.tabs.delete(tab.id);
+  const restarted = createWindowWorkspaces(app.api);
+  await restarted.ready;
+  app.windows.set(windowId, late);
+  for (const tab of lateTabs) app.tabs.set(tab.id, tab);
+  app.calls.length = 0;
+  return restarted;
+}
+
+test("resuming a workspace whose window is open but unlinked reuses that window", async () => {
+  const app = await enabled();
+  const restarted = await restartWithLateWindow(app, 10);
+  assert.equal((await restarted.handle({ type: "snapshot", windowId: 10 })).currentWorkspaceId, null);
+  await restarted.handle({ type: "focusWindowWorkspace", workspaceId: "work" });
+  const view = await restarted.handle({ type: "snapshot", windowId: 10 });
+  assert.equal(view.currentWorkspaceId, "work");
+  assert.equal(view.shortcutSlots[1], "work");
+  assert.equal(app.calls.some(([name]) => name === "window.create" || name === "tab.create"), false);
+});
+
+test("a window restored after startup relinks instead of being duplicated", async (t) => {
+  const app = await enabled();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await app.api.tabs.create({ windowId: 10, url: "https://work.example/second" });
+  await createWindowWorkspaces(app.api).ready; // capture the two-page inventory
+  const restarted = await restartWithLateWindow(app, 10);
+  app.api.windows.onCreated.emit(app.windows.get(10));
+  t.mock.timers.tick(1000);
+  await restarted.handle({ type: "setWorkspacePreferences", minimizeOthers: true });
+  assert.equal((await restarted.handle({ type: "snapshot", windowId: 10 })).currentWorkspaceId, "work");
+  assert.equal(app.calls.some(([name]) => name === "window.create"), false);
+});
+
+test("a torn-off single tab never claims a put-away workspace", async (t) => {
+  const app = await enabled();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await app.controller.handle({ type: "putAwayWorkspace", workspaceId: "work" });
+  app.windows.set(50, { id: 50, type: "normal", incognito: false, state: "normal" });
+  await app.api.tabs.create({ windowId: 50, url: "https://work.example" });
+  app.api.windows.onCreated.emit(app.windows.get(50));
+  t.mock.timers.tick(1000);
+  await app.barrier();
+  assert.equal((await app.controller.handle({ type: "snapshot", windowId: 50 })).currentWorkspaceId, null);
 });
 
 test("browser restart reconnects exact inventories but leaves ambiguous windows unassigned", async () => {
