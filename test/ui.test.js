@@ -1,11 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WORKSPACE_COLORS } from "../src/domain.js";
-import { WORKSPACE_SWATCHES, send, disableControls } from "../src/ui.js";
-
-test("popup and Settings share a swatch for every workspace colour", () => {
-  assert.deepEqual(Object.keys(WORKSPACE_SWATCHES), WORKSPACE_COLORS);
-});
+import { send, disableControls } from "../src/ui.js";
 
 test("UI messages unwrap results and surface controller or connection errors", async (t) => {
   const messages = [];

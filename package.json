@@ -5,8 +5,13 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:browser": "playwright test",
+    "test:all": "npm test && npm run test:browser",
     "check": "node --check src/background.js && node --check src/window-workspaces.js && node --check src/domain.js && node --check src/workspace-drafts.js && node --check src/ui.js && node --check popup/popup.js && node --check options/options.js && node scripts/validate-manifest.js",
     "version:patch": "node scripts/bump-version.js",
     "hooks:install": "git config core.hooksPath .githooks"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

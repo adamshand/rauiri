@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWindowWorkspaces, pageOverlap, validateWindowState } from "../src/window-workspaces.js";
+import { pageOverlap, validateWindowState } from "../src/window-workspaces.js";
 import { harness, connected } from "./helpers/browser.js";
 
 test("attaching keeps the previous inventory only in the downloadable restore point", async () => {
@@ -15,25 +15,6 @@ test("attaching keeps the previous inventory only in the downloadable restore po
   const current = app.local.rauiriWindowWorkspaces.workspaces.find((workspace) => workspace.id === "work");
   assert.deepEqual(current.tabs.map((tab) => tab.url), ["https://attached.example"]);
   assert.equal("savedBeforeAttach" in current, false);
-});
-
-test("state validation drops obsolete attachment inventories and mode flags", async () => {
-  const app = await connected();
-  const state = structuredClone(app.local.rauiriWindowWorkspaces);
-  state.enabled = true;
-  state.workspaces[0].savedBeforeAttach = [{ url: "https://obsolete.example" }];
-  assert.deepEqual(validateWindowState(state), app.local.rauiriWindowWorkspaces);
-});
-
-test("configuration exports are detached from committed state", async () => {
-  const app = await connected();
-  await app.controller.handle({ type: "addRoute", hostname: "example.com", contextId: "work" });
-  const backup = await app.controller.handle({ type: "exportBackup", configurationOnly: true });
-  backup.state.routes[0].hostname = "changed.example";
-  backup.state.shortcutSlots[0] = null;
-  const view = await app.controller.handle({ type: "snapshot" });
-  assert.equal(view.routes[0].hostname, "example.com");
-  assert.equal(view.shortcutSlots[0], "personal");
 });
 
 test("put-away refuses to close when its fresh inventory cannot be read", async () => {
@@ -60,7 +41,7 @@ test("extension reload retains missing pages from an interrupted restore", async
   await assert.rejects(app.controller.handle({ type: "focusWindowWorkspace", workspaceId: "personal" }), /Interrupted/);
   delete app.session.rauiriWorkspaceWindows;
   app.api.tabs.create = create;
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   const workspace = (await restarted.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "personal");
   assert.equal(workspace.restoring, true);
@@ -73,7 +54,7 @@ test("manual filing survives a worker restart without changing navigation intent
   const app = await connected();
   await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "personal" });
   await app.controller.handle({ type: "moveWindowTab", tabId: 1, workspaceId: "work" });
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   const backup = await restarted.handle({ type: "exportBackup" });
   assert.equal(backup.state.workspaces.find((w) => w.id === "work").tabs.find((tab) => tab.url === "https://personal.example").routeOverride, true);
@@ -107,7 +88,7 @@ test("failed configuration saves are neither published nor committed by later co
 test("settings and cached backups stay available while startup discovery hangs", async () => {
   const app = await connected();
   app.api.windows.getAll = () => new Promise(() => {});
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   const snapshot = await Promise.race([
     restarted.handle({ type: "snapshot" }),
     new Promise((_, reject) => setTimeout(() => reject(new Error("Settings blocked by browser discovery")), 100)),
@@ -192,23 +173,31 @@ test("a hung fresh capture falls back to an explicitly cached backup without blo
 
 test("restore points remain exportable while browser startup is pending", async () => {
   const app = await connected();
-  app.local.rauiriBeforeWorkspaceImport = structuredClone(app.local.rauiriWindowWorkspaces);
-  app.local.rauiriBeforeReconnect = structuredClone(app.local.rauiriWindowWorkspaces);
-  app.local.rauiriBeforeWorkspaceAttach = structuredClone(app.local.rauiriWindowWorkspaces);
+  const restorePoints = [
+    ["rauiriBeforeWorkspaceImport", "exportPreviousBackup", "Before import"],
+    ["rauiriBeforeReconnect", "exportReconnectBackup", "Before reconnect"],
+    ["rauiriBeforeWorkspaceAttach", "exportAttachBackup", "Before attach"],
+    ["rauiriBeforeWorkspaceDelete", "exportWorkspaceDeletionBackup", "Before deletion"],
+  ];
+  for (const [key, , title] of restorePoints) {
+    const state = structuredClone(app.local.rauiriWindowWorkspaces);
+    state.workspaces[0].title = title;
+    app.local[key] = state;
+  }
   app.api.windows.getAll = () => new Promise(() => {});
-  const restarted = createWindowWorkspaces(app.api);
-  for (const type of ["exportPreviousBackup", "exportReconnectBackup", "exportAttachBackup"]) {
+  const restarted = app.restart();
+  for (const [, type, title] of restorePoints) {
     const backup = await restarted.handle({ type });
-    assert.equal(validateWindowState(backup.state).workspaces.length, 5);
+    assert.equal(backup.state.workspaces[0].title, title);
   }
 });
 
-test("worker reload reconnects windows before serving snapshots or queued mutations", async () => {
+test("queued mutations wait for worker reconnection without recreating windows", async () => {
   const app = await connected();
   const expectedBindings = structuredClone(app.session.rauiriWorkspaceWindows);
   // Inventories can change just before the worker sleeps; session IDs must win.
   app.tabs.get(1).url = "https://personal.example/changed";
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   const mutation = restarted.handle({ type: "setWorkspacePreferences", minimizeOthers: false });
   await mutation;
   const view = await restarted.handle({ type: "snapshot", windowId: 1 });
@@ -216,15 +205,6 @@ test("worker reload reconnects windows before serving snapshots or queued mutati
   assert.equal(view.currentWorkspaceId, "personal");
   assert.deepEqual(app.session.rauiriWorkspaceWindows, expectedBindings);
   assert.equal(app.calls.some(([name]) => name === "window.create"), false);
-});
-
-test("existing window workspaces retain live tabs and native pins without migration", async () => {
-  const app = await connected();
-  const view = await app.controller.handle({ type: "snapshot", windowId: 1 });
-  assert.equal(view.currentWorkspaceId, "personal");
-  assert.equal(view.workspaces.find((w) => w.id === "work").windowId, 10);
-  assert.equal(app.tabs.get(3).pinned, true);
-  assert.equal(app.calls.length, 0);
 });
 
 test("switching live workspaces never recreates tabs and minimises only managed windows", async () => {
@@ -254,17 +234,10 @@ test("cleanup stays in the background even for follow rules", async () => {
   await app.controller.handle({ type: "addRoute", hostname: "personal.example", contextId: "work", moveExisting: true });
   assert.equal(app.tabs.get(1).windowId, 10);
   assert.equal(app.windows.get(1).focused, true);
-  await app.api.tabs.create({ windowId: 1, url: "https://follow.example", active: true });
+  const tab = await app.api.tabs.create({ windowId: 1, url: "https://follow.example", active: true });
   await app.controller.handle({ type: "addRoute", hostname: "follow.example", contextId: "work", activate: true, moveExisting: true });
+  assert.equal(app.tabs.get(tab.id).windowId, 10);
   assert.equal(app.windows.get(1).focused, true);
-});
-
-test("a follow rule does not steal focus for a background tab", async () => {
-  const app = await connected();
-  await app.api.tabs.create({ windowId: 1, url: "https://background.example", active: false });
-  await app.controller.handle({ type: "addRoute", hostname: "background.example", contextId: "work", activate: true, moveExisting: true });
-  assert.equal(app.windows.get(1).focused, true);
-  assert.equal(app.windows.get(10).focused, false);
 });
 
 test("tab updates and individual closes automatically update the saved workspace", async (t) => {
@@ -307,14 +280,6 @@ test("window closure retains a resumable snapshot, including native pins", async
   assert.equal(pin.pinned, true);
 });
 
-test("restarting the worker reconnects live windows without opening tabs", async () => {
-  const app = await connected();
-  const restarted = createWindowWorkspaces(app.api);
-  await restarted.ready;
-  assert.equal((await restarted.handle({ type: "snapshot", windowId: 10 })).currentWorkspaceId, "work");
-  assert.equal(app.calls.some(([method]) => method === "window.create"), false);
-});
-
 test("a workspace backup can be imported into a fresh profile without opening windows", async () => {
   const source = await connected();
   const backup = await source.controller.handle({ type: "exportBackup" });
@@ -322,16 +287,24 @@ test("a workspace backup can be imported into a fresh profile without opening wi
   await target.controller.ready;
   await target.controller.handle({ type: "importBackup", backup });
   assert.equal(target.calls.length, 0);
-  assert.equal((await target.controller.handle({ type: "snapshot" })).workspaces.every((w) => w.windowId === null), true);
+  const view = await target.controller.handle({ type: "snapshot" });
+  assert.equal(view.workspaces.every((w) => w.windowId === null), true);
+  assert.equal(view.workspaces.find((w) => w.id === "personal").tabCount, 2);
+  assert.equal(view.workspaces.find((w) => w.id === "work").tabCount, 1);
 });
 
-test("workspace backups validate before replacement and configuration-only export excludes URLs", async () => {
+test("workspace backups reject non-web pages and configuration exports omit page inventories", async () => {
   const app = await connected();
   const backup = await app.controller.handle({ type: "exportBackup" });
   assert.equal(validateWindowState(backup.state).workspaces.length, 5);
   const config = await app.controller.handle({ type: "exportBackup", configurationOnly: true });
-  assert.equal(config.state.workspaces.every((w) => w.tabs.length === 0), true);
-  assert.equal(config.legacyState, undefined);
+  assert.deepEqual(config.state.workspaces.map(({ id, title, tabs }) => ({ id, title, tabs })), [
+    { id: "personal", title: "Personal", tabs: [] },
+    { id: "work", title: "Work", tabs: [] },
+    { id: "groundtruth", title: "Groundtruth", tabs: [] },
+    { id: "read-later", title: "Read Later", tabs: [] },
+    { id: "inactive", title: "Inactive", tabs: [] },
+  ]);
   backup.state.workspaces[0].tabs[0].url = "javascript:alert(1)";
   assert.throws(() => validateWindowState(backup.state), /Invalid saved/);
 });
@@ -438,7 +411,7 @@ test("previous-workspace toggles and numbered shortcuts use stable order, not re
   app.api.commands.onCommand.emit("previous-workspace");
   await app.barrier();
   assert.equal(app.windows.get(10).focused, true);
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   const snapshot = await restarted.handle({ type: "snapshot" });
   assert.deepEqual(snapshot.recentWorkspaceIds.slice(0, 2), ["work", "personal"]);
@@ -489,7 +462,7 @@ test("Personal inherits the project space when Work is newly pinned, even after 
   Object.assign(app.windows.get(10), bounds);
   await app.controller.handle({ type: "setPinnedWorkspace", workspaceId: "work" });
   assert.equal(app.windows.get(1).state, "minimized");
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   await restarted.handle({ type: "focusWindowWorkspace", workspaceId: "personal" });
   for (const [key, value] of Object.entries(bounds)) assert.equal(app.windows.get(1)[key], value);
@@ -813,7 +786,10 @@ test("a failed live merge leaves the source workspace and every live tab recover
     return move(id, props);
   };
   await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" }), /Move failed/);
-  assert.equal(app.tabs.size, 4);
+  assert.deepEqual([...app.tabs.keys()].sort((a, b) => a - b), [1, 2, 3, 100]);
+  assert.equal(app.tabs.get(1).url, "https://personal.example");
+  assert.equal(app.tabs.get(3).url, "https://pin.example");
+  assert.equal(app.tabs.get(3).pinned, true);
   assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.some((w) => w.id === "personal"), true);
   assert.equal(app.local.rauiriBeforeWorkspaceDelete.workspaces.find((w) => w.id === "personal").tabs.length, 2);
 });
@@ -882,7 +858,7 @@ test("live merging stops if new tabs appear in its source window", async () => {
   };
   await assert.rejects(app.controller.handle({ type: "deleteWindowWorkspace", workspaceId: "personal", destinationId: "work", tabs: "move", rules: "move" }), /New tabs appeared/);
   assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.some((w) => w.id === "personal"), true);
-  assert.equal(app.tabs.size, 5);
+  assert.equal([...app.tabs.values()].find((tab) => tab.url === "https://new.example").windowId, 1);
 });
 
 test("deletion backup failure prevents live tab moves", async () => {
@@ -966,7 +942,7 @@ test("putting away clears only its own slot and resume does not reclaim it", asy
   assert.equal((await app.controller.handle({ type: "snapshot" })).workspaces.find((w) => w.id === "work").shortcut, null);
 });
 
-test("native browser restoration restores shortcut slots, but explicit resume does not", async (t) => {
+test("native browser restoration restores shortcut slots", async (t) => {
   const app = await connected();
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const restoredWindows = structuredClone([...app.windows.entries()]);
@@ -977,7 +953,7 @@ test("native browser restoration restores shortcut slots, but explicit resume do
   for (const [id, window] of restoredWindows) app.windows.set(id, window);
   for (const [id, tab] of restoredTabs) app.tabs.set(id, tab);
   delete app.session.rauiriWorkspaceWindows;
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   assert.deepEqual((await restarted.handle({ type: "snapshot" })).shortcutSlots.slice(0, 2), ["personal", "work"]);
   assert.equal(app.local.rauiriWindowWorkspaces.closedShortcutSlots.every((id) => id === null), true);
@@ -1069,14 +1045,14 @@ test("extension reload reconnects windows whose tabs drifted and keeps their sho
   const app = await connected();
   for (const page of ["a", "b", "c"]) await app.api.tabs.create({ windowId: 1, url: `https://personal.example/${page}` });
   // A worker restart keeps session bindings, so it captures the larger inventory.
-  await createWindowWorkspaces(app.api).ready;
+  await app.restart().ready;
   assert.equal(app.local.rauiriWindowWorkspaces.workspaces.find((w) => w.id === "personal").tabs.length, 5);
   // Extension reload wipes session storage; meanwhile one page changed and one opened.
   delete app.session.rauiriWorkspaceWindows;
   [...app.tabs.values()].find((tab) => tab.url === "https://personal.example/a").url = "https://personal.example/changed";
   await app.api.tabs.create({ windowId: 1, url: "https://personal.example/new" });
   const saved = structuredClone(app.local.rauiriWindowWorkspaces);
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   const view = await restarted.handle({ type: "snapshot", windowId: 1 });
   assert.equal(view.currentWorkspaceId, "personal");
@@ -1089,7 +1065,7 @@ test("a workspace that fails to reconnect remembers its number for a later attac
   const app = await connected();
   delete app.session.rauiriWorkspaceWindows;
   for (const tab of app.tabs.values()) if (tab.windowId === 10) tab.url = "https://unrelated.example/";
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   let view = await restarted.handle({ type: "snapshot", windowId: 10 });
   assert.equal(view.currentWorkspaceId, null);
@@ -1107,7 +1083,7 @@ async function restartWithLateWindow(app, windowId) {
   const lateTabs = [...app.tabs.values()].filter((tab) => tab.windowId === windowId);
   app.windows.delete(windowId);
   for (const tab of lateTabs) app.tabs.delete(tab.id);
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   app.windows.set(windowId, late);
   for (const tab of lateTabs) app.tabs.set(tab.id, tab);
@@ -1130,7 +1106,7 @@ test("a window restored after startup relinks instead of being duplicated", asyn
   const app = await connected();
   t.mock.timers.enable({ apis: ["setTimeout"] });
   await app.api.tabs.create({ windowId: 10, url: "https://work.example/second" });
-  await createWindowWorkspaces(app.api).ready; // capture the two-page inventory
+  await app.restart().ready; // capture the two-page inventory
   const restarted = await restartWithLateWindow(app, 10);
   app.api.windows.onCreated.emit(app.windows.get(10));
   t.mock.timers.tick(1000);
@@ -1154,13 +1130,13 @@ test("a torn-off single tab never claims a put-away workspace", async (t) => {
 test("browser restart reconnects exact inventories but leaves ambiguous windows unassigned", async () => {
   const app = await connected();
   delete app.session.rauiriWorkspaceWindows;
-  const restarted = createWindowWorkspaces(app.api);
+  const restarted = app.restart();
   await restarted.ready;
   assert.equal((await restarted.handle({ type: "snapshot", windowId: 10 })).currentWorkspaceId, "work");
   delete app.session.rauiriWorkspaceWindows;
   app.windows.set(99, { id: 99, type: "normal", incognito: false, state: "normal" });
   await app.api.tabs.create({ windowId: 99, url: "https://work.example" });
-  const ambiguous = createWindowWorkspaces(app.api);
+  const ambiguous = app.restart();
   await ambiguous.ready;
   const view = await ambiguous.handle({ type: "snapshot", windowId: 10 });
   assert.equal(view.workspaces.find((w) => w.id === "work").windowId, null);

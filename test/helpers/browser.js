@@ -95,16 +95,46 @@ export function harness({ fresh = false, empty = false, start = createWindowWork
       move: async (id, props) => {
         calls.push(["tab.move", id, props]);
         const oldWindowId = tabs.get(id).windowId;
-        Object.assign(tabs.get(id), { windowId: props.windowId, pinned: false, active: false });
+        const tab = tabs.get(id);
+        Object.assign(tab, { windowId: props.windowId, pinned: false, active: false });
+        // All extension moves append; a moved tab must appear at the end of the
+        // destination strip, not retain its old Map insertion position.
+        tabs.delete(id);
+        tabs.set(id, tab);
         if (![...tabs.values()].some((tab) => tab.windowId === oldWindowId)) windows.delete(oldWindowId);
         return { ...tabs.get(id) };
       },
       onCreated: event(), onUpdated: event(), onMoved: event(), onDetached: event(), onAttached: event(), onRemoved: event(),
     },
   };
-  const controller = start(api);
+  let controller;
+  let generation = 0;
+  function restart() {
+    const worker = ++generation;
+    // Chrome kills the previous worker: its listeners and delayed work must not
+    // keep mutating the shared browser/storage after a simulated restart.
+    const workerApi = (target) => new Proxy(target, {
+      get(object, key) {
+        const value = object[key];
+        if (typeof value === "function") return (...args) => {
+          if (worker !== generation) throw new Error("Worker has stopped.");
+          if (key === "addListener") {
+            const [listener] = args;
+            return value.call(object, (...eventArgs) => {
+              if (worker === generation) return listener(...eventArgs);
+            });
+          }
+          return value.apply(object, args);
+        };
+        return value && typeof value === "object" ? workerApi(value) : value;
+      },
+    });
+    controller = start(workerApi(api));
+    return controller;
+  }
+  restart();
   const barrier = () => controller.handle({ type: "setWorkspacePreferences", minimizeOthers: true });
-  return { api, controller, local, session, windows, tabs, calls, barrier };
+  return { api, get controller() { return controller; }, restart, local, session, windows, tabs, calls, barrier };
 }
 
 export async function connected() {

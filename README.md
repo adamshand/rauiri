@@ -82,13 +82,19 @@ A permanently unresponsive browser API can still require reloading the extension
 
 ## Development
 
-Browser-native JavaScript modules; no build step or dependencies.
+Browser-native JavaScript modules; no build step or runtime dependencies. Playwright is a development-only dependency for browser tests.
 
 ```sh
+npm ci
 npm run hooks:install
-npm test
+npm test                  # Fast controller/message/event tests
 npm run check
+npx playwright install chromium  # Once, for browser tests
+npm run test:browser      # Real Chromium popup/Settings and MV3 worker tests
+npm run test:all          # Both suites
 ```
+
+Browser tests use disposable extension copies and profiles, plus a local HTTP server; they never touch your installed extension or browser profile. Chrome API fault injection covers startup stalls and failed saves while the UI and controller remain real. Failure traces are saved under `test-results/`. These tests cover behavior, not a line-coverage target; the create/save/remove regressions were also checked against deliberately broken implementations.
 
 The pre-commit hook patch-bumps `manifest.json` and `package.json` together for extension changes. After changes, reload Rauiri in `chrome://extensions` and reopen its popup/Settings.
 
